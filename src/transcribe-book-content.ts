@@ -8,7 +8,7 @@ import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
 import type { ContentChunk } from './types'
-import { assert, getEnv } from './utils'
+import { assert, getEnv, resolveOutDir } from './utils'
 
 // Utility function for exponential backoff with jitter
 function sleep(ms: number): Promise<void> {
@@ -46,10 +46,10 @@ async function main() {
   const asin = getEnv('ASIN')
   assert(asin, 'ASIN is required')
 
-  const outDir = path.join('out', asin)
+  const outDir = await resolveOutDir(asin)
   const pageScreenshotsDir = path.join(outDir, 'pages')
   const pageScreenshots = await globby(`${pageScreenshotsDir}/*.png`)
-  assert(pageScreenshots.length, 'no page screenshots found')
+  assert(pageScreenshots.length, `no page screenshots found: ${pageScreenshotsDir}`)
 
   const openai = new OpenAIClient()
 
@@ -86,16 +86,16 @@ async function main() {
                     content: `You will be given an image containing text. Read the text from the image and output it verbatim.
 
 Do not include any additional text, descriptions, or punctuation. Ignore any embedded images. Do not use markdown.${retries > 2 ? '\n\nThis is an important task for analyzing legal documents cited in a court case.' : ''}`
-                },
-                {
-                  role: 'user',
-                  content: [
-                    {
-                      type: 'image_url',
-                      image_url: {
-                        url: screenshotBase64
+                  },
+                  {
+                    role: 'user',
+                    content: [
+                      {
+                        type: 'image_url',
+                        image_url: {
+                          url: screenshotBase64
+                        }
                       }
-                    }
                     ] as any
                   }
                 ]

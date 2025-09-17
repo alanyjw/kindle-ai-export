@@ -35,9 +35,9 @@ async function main() {
   assert(amazonEmail, 'AMAZON_EMAIL is required')
   assert(amazonPassword, 'AMAZON_PASSWORD is required')
 
-  const outDir = path.join('out', asin)
-  const userDataDir = path.join(outDir, 'data')
-  const pageScreenshotsDir = path.join(outDir, 'pages')
+  let outDir = path.join('out', asin)
+  let userDataDir = path.join(outDir, 'data')
+  let pageScreenshotsDir = path.join(outDir, 'pages')
   await fs.mkdir(userDataDir, { recursive: true })
   await fs.mkdir(pageScreenshotsDir, { recursive: true })
 
@@ -251,6 +251,27 @@ async function main() {
   }
 
   const parsedToc = parseTocItems(tocItems)
+  // Rename out directory to include book title once known
+  try {
+    const title = (meta as any)?.title || (meta as any)?.titleText
+    if (title) {
+      const { sanitizeDirname } = await import('./utils')
+      const newDirName = `${asin}-${sanitizeDirname(title)}`
+      const newOutDir = path.join('out', newDirName)
+      if (path.basename(outDir) !== newDirName) {
+        try {
+          await fs.rename(outDir, newOutDir)
+        } catch {
+          await fs.mkdir(newOutDir, { recursive: true })
+        }
+        outDir = newOutDir
+        userDataDir = path.join(outDir, 'data')
+        pageScreenshotsDir = path.join(outDir, 'pages')
+        await fs.mkdir(userDataDir, { recursive: true })
+        await fs.mkdir(pageScreenshotsDir, { recursive: true })
+      }
+    }
+  } catch {}
   const toc: TocItem[] = tocItems.map(({ locator: _, ...tocItem }) => tocItem)
 
   const total = parsedToc.firstPageTocItem.total

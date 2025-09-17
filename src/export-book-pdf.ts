@@ -7,13 +7,13 @@ import path from 'node:path'
 import PDFDocument from 'pdfkit'
 
 import type { BookMetadata, ContentChunk } from './types'
-import { assert, getEnv } from './utils'
+import { assert, getEnv, resolveOutDir } from './utils'
 
 async function main() {
   const asin = getEnv('ASIN')
   assert(asin, 'ASIN is required')
 
-  const outDir = path.join('out', asin)
+  const outDir = await resolveOutDir(asin)
 
   const content = JSON.parse(
     await fsp.readFile(path.join(outDir, 'content.json'), 'utf8')

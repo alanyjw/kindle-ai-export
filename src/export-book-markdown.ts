@@ -4,13 +4,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { BookMetadata, ContentChunk } from './types'
-import { assert, getEnv } from './utils'
+import { assert, getEnv, resolveOutDir } from './utils'
 
 async function main() {
   const asin = getEnv('ASIN')
   assert(asin, 'ASIN is required')
 
-  const outDir = path.join('out', asin)
+  const outDir = await resolveOutDir(asin)
 
   const content = JSON.parse(
     await fs.readFile(path.join(outDir, 'content.json'), 'utf8')

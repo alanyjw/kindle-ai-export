@@ -1,4 +1,6 @@
+import type { Dirent } from 'node:fs'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 
 import hashObjectImpl from 'hash-object'
 import timeFormat from 'hh-mm-ss'
@@ -42,6 +44,30 @@ export function hashObject(obj: Record<string, any>): string {
     algorithm: 'sha1',
     encoding: 'hex'
   })
+}
+
+export function sanitizeDirname(name: string): string {
+  // Remove characters not allowed in file/folder names and collapse spaces
+  return name
+    .replaceAll(/["*/:<>?\\|]/g, '')
+    .replaceAll(/\s+/g, ' ')
+    .trim()
+    .slice(0, 128)
+}
+
+export async function resolveOutDir(asin: string): Promise<string> {
+  const baseOutDir = 'out'
+  try {
+    const entries = (await fs.readdir(baseOutDir, {
+      withFileTypes: true
+    } as any)) as unknown as Dirent[]
+    const match = entries.find(
+      (e) => e.isDirectory() && e.name.toLowerCase().startsWith(asin.toLowerCase())
+    )
+    if (match) return path.join(baseOutDir, match.name)
+  } catch {}
+
+  return path.join(baseOutDir, asin)
 }
 
 export type FfmpegProgressEvent = {
