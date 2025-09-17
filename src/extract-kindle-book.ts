@@ -49,7 +49,27 @@ async function main() {
     channel: 'chrome',
     executablePath:
       '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    args: ['--hide-crash-restore-bubble'],
+    args: [
+      '--hide-crash-restore-bubble',
+      // Disable password manager popups
+      '--disable-password-manager-reauthentication',
+      '--disable-password-generation',
+      '--disable-save-password-bubble',
+      '--disable-password-manager',
+      '--disable-password-manager-bubble',
+      '--disable-passkeys',
+
+      // Prefer basic password store and mock keychain to avoid macOS prompts/passkeys
+      '--password-store=basic',
+      '--use-mock-keychain',
+
+      // Disable passkey/WebAuthn popups
+      '--disable-web-security',
+      '--disable-features=VizDisplayCompositor',
+      '--disable-features=WebAuthentication',
+      '--disable-component-extensions-with-background-pages',
+      '--no-first-run'
+    ],
     ignoreDefaultArgs: ['--enable-automation'],
     deviceScaleFactor: 2,
     viewport: { width: 1280, height: 720 }
