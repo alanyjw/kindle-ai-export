@@ -279,7 +279,7 @@ async function main() {
     if (pageNav?.page === undefined) {
       break
     }
-    if (pageNav.page > totalContentPages) {
+    if (pageNav.page >= totalContentPages) {
       break
     }
 
@@ -314,7 +314,7 @@ async function main() {
     // the screenshot changing the DOM temporarily and not being stable yet.
     await delay(100)
 
-    if (pageNav.page > totalContentPages) {
+    if (pageNav.page >= totalContentPages) {
       break
     }
 
