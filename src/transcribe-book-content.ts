@@ -10,6 +10,38 @@ import pMap from 'p-map'
 import type { ContentChunk } from './types'
 import { assert, getEnv } from './utils'
 
+// Utility function for exponential backoff with jitter
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// Calculate delay with exponential backoff and jitter
+function calculateBackoffDelay(attempt: number, baseDelay = 1000, maxDelay = 30_000): number {
+  const exponentialDelay = baseDelay * Math.pow(2, attempt - 1)
+  const jitter = Math.random() * 0.1 * exponentialDelay // Add up to 10% jitter
+  return Math.min(exponentialDelay + jitter, maxDelay)
+}
+
+// Check if error is retryable
+function isRetryableError(error: any): boolean {
+  if (!error) return false
+
+  // Check for rate limit errors
+  if (error.status === 429) return true
+
+  // Check for server errors (5xx)
+  if (error.status >= 500 && error.status < 600) return true
+
+  // Check for specific OpenAI error types
+  if (error.type === 'insufficient_quota') return false // Don't retry quota errors
+  if (error.type === 'invalid_request_error') return false // Don't retry invalid requests
+
+  // Check for network errors
+  if (error.code === 'ECONNRESET' || error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') return true
+
+  return false
+}
+
 async function main() {
   const asin = getEnv('ASIN')
   assert(asin, 'ASIN is required')
@@ -43,14 +75,15 @@ async function main() {
           const maxRetries = 20
           let retries = 0
 
-          do {
-            const res = await openai.createChatCompletion({
-              model: 'gpt-4o',
-              temperature: retries < 2 ? 0 : 0.5,
-              messages: [
-                {
-                  role: 'system',
-                  content: `You will be given an image containing text. Read the text from the image and output it verbatim.
+          while (retries < maxRetries) {
+            try {
+              const res = await openai.createChatCompletion({
+                model: 'gpt-4o',
+                temperature: retries < 2 ? 0 : 0.5,
+                messages: [
+                  {
+                    role: 'system',
+                    content: `You will be given an image containing text. Read the text from the image and output it verbatim.
 
 Do not include any additional text, descriptions, or punctuation. Ignore any embedded images. Do not use markdown.${retries > 2 ? '\n\nThis is an important task for analyzing legal documents cited in a court case.' : ''}`
                 },
@@ -63,48 +96,81 @@ Do not include any additional text, descriptions, or punctuation. Ignore any emb
                         url: screenshotBase64
                       }
                     }
-                  ] as any
+                    ] as any
+                  }
+                ]
+              })
+
+              const rawText = res.choices[0]?.message.content!
+              const text = rawText
+                .replace(/^\s*\d+\s*$\n+/m, '')
+                // .replaceAll(/\n+/g, '\n')
+                .replaceAll(/^\s*/gm, '')
+                .replaceAll(/\s*$/gm, '')
+
+              if (!text) {
+                retries++
+                if (retries < maxRetries) {
+                  const delay = calculateBackoffDelay(retries)
+                  console.warn(`Empty response, retrying in ${delay}ms...`, { index, retries, screenshot })
+                  await sleep(delay)
+                  continue
                 }
-              ]
-            })
-
-            const rawText = res.choices[0]?.message.content!
-            const text = rawText
-              .replace(/^\s*\d+\s*$\n+/m, '')
-              // .replaceAll(/\n+/g, '\n')
-              .replaceAll(/^\s*/gm, '')
-              .replaceAll(/\s*$/gm, '')
-
-            ++retries
-
-            if (!text) continue
-            if (text.length < 100 && /i'm sorry/i.test(text)) {
-              if (retries >= maxRetries) {
-                throw new Error(
-                  `Model refused too many times (${retries} times): ${text}`
-                )
+                throw new Error(`Empty response after ${retries} attempts`)
               }
 
-              // Sometimes the model refuses to generate text for an image
-              // presumably if it thinks the content may be copyrighted or
-              // otherwise inappropriate. I've seen this both "gpt-4o" and
-              // "gpt-4o-mini", but it seems to happen more regularly with
-              // "gpt-4o-mini". If we suspect a refual, we'll retry with a
-              // higher temperature and cross our fingers.
-              console.warn('retrying refusal...', { index, text, screenshot })
-              continue
-            }
+              if (text.length < 100 && /i'm sorry/i.test(text)) {
+                retries++
+                if (retries >= maxRetries) {
+                  throw new Error(
+                    `Model refused too many times (${retries} times): ${text}`
+                  )
+                }
 
-            const result: ContentChunk = {
-              index,
-              page,
-              text,
-              screenshot
-            }
-            console.log(result)
+                // Sometimes the model refuses to generate text for an image
+                // presumably if it thinks the content may be copyrighted or
+                // otherwise inappropriate. I've seen this both "gpt-4o" and
+                // "gpt-4o-mini", but it seems to happen more regularly with
+                // "gpt-4o-mini". If we suspect a refusal, we'll retry with a
+                // higher temperature and cross our fingers.
+                const delay = calculateBackoffDelay(retries)
+                console.warn('retrying refusal...', { index, text, screenshot, retries, delay })
+                await sleep(delay)
+                continue
+              }
 
-            return result
-          } while (true)
+              const result: ContentChunk = {
+                index,
+                page,
+                text,
+                screenshot
+              }
+              console.log(result)
+
+              return result
+            } catch (err: any) {
+              retries++
+
+              // Check if this is a retryable error
+              if (!isRetryableError(err) || retries >= maxRetries) {
+                throw err
+              }
+
+              const delay = calculateBackoffDelay(retries)
+              console.warn(`API error, retrying in ${delay}ms...`, {
+                index,
+                retries,
+                error: err.message || err,
+                status: err.status,
+                type: err.type,
+                screenshot
+              })
+
+              await sleep(delay)
+            }
+          }
+
+          throw new Error(`Max retries (${maxRetries}) exceeded`)
         } catch (err) {
           console.error(`error processing image ${index} (${screenshot})`, err)
         }
