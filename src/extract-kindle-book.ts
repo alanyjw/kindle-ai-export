@@ -131,7 +131,7 @@ async function main() {
         await page.locator('input[type="tel"]').fill(code)
         await page
           .locator(
-            'input[type="submit"][aria-labelledby="cvf-submit-otp-button-announce"]'
+            'input[type="submit"][aria-labelledby="a-autoid-0-announce"]'
           )
           .click()
       }
@@ -150,7 +150,7 @@ async function main() {
   // await page.waitForURL('**/signin')
 
   async function updateSettings() {
-    await page.locator('ion-button[title="Reader settings"]').click()
+    await page.locator('ion-button[aria-label="Reader settings"]').click()
     await delay(1000)
 
     // Change font to Amazon Ember
@@ -163,7 +163,7 @@ async function main() {
       })
       .click()
 
-    await page.locator('ion-button[title="Reader settings"]').click()
+    await page.locator('ion-button[aria-label="Reader settings"]').click()
     await delay(1000)
   }
 
@@ -171,7 +171,7 @@ async function main() {
     await delay(1000)
     await page.locator('#reader-header').hover({ force: true })
     await delay(200)
-    await page.locator('ion-button[title="Reader menu"]').click()
+    await page.locator('ion-button[aria-label="Reader menu"]').click()
     await delay(1000)
     await page
       .locator('ion-item[role="listitem"]', { hasText: 'Go to Page' })
@@ -214,7 +214,7 @@ async function main() {
 
   const initialPageNav = await getPageNav()
 
-  await page.locator('ion-button[title="Table of Contents"]').click()
+  await page.locator('ion-button[aria-label="Table of Contents"]').click()
   await delay(1000)
 
   const $tocItems = await page.locator('ion-list ion-item').all()
