@@ -16,6 +16,23 @@ import {
   parseJsonpResponse
 } from './utils'
 
+// ANSI color codes for terminal output
+const colors = {
+  reset: '\u001B[0m',
+  bright: '\u001B[1m',
+  dim: '\u001B[90m',
+  red: '\u001B[31m',
+  green: '\u001B[32m',
+  yellow: '\u001B[33m',
+  blue: '\u001B[34m',
+  magenta: '\u001B[35m',
+  cyan: '\u001B[36m',
+  brightCyan: '\u001B[1;36m',
+  brightYellow: '\u001B[1;33m',
+  brightGreen: '\u001B[1;32m',
+  brightRed: '\u001B[1;31m'
+} as const
+
 interface PageNav {
   page?: number
   location?: number
@@ -31,11 +48,110 @@ async function main() {
   const asin = getEnv('ASIN')
   const amazonEmail = getEnv('AMAZON_EMAIL')
   const amazonPassword = getEnv('AMAZON_PASSWORD')
+  const force = getEnv('FORCE') === 'true'
   assert(asin, 'ASIN is required')
   assert(amazonEmail, 'AMAZON_EMAIL is required')
   assert(amazonPassword, 'AMAZON_PASSWORD is required')
 
-  let outDir = path.join('out', asin)
+  // Check if extraction already exists and is complete (OFFLINE CHECK)
+  const { resolveOutDir, fileExists } = await import('./utils')
+  let outDir = await resolveOutDir(asin)
+  const metadataPath = path.join(outDir, 'metadata.json')
+  const pagesDir = path.join(outDir, 'pages')
+
+  if (!force && await fileExists(metadataPath)) {
+    try {
+      const existingMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as BookMetadata
+      const existingPages = existingMetadata.pages || []
+      const expectedPages = (existingMetadata.meta as any)?.totalPages || existingPages.length
+
+      // Analyze screenshot files to understand extraction progress
+      let actualScreenshots = 0
+      let firstPage = 0
+      let lastPage = 0
+      let pageRange = ''
+
+      try {
+        const screenshotFiles = await fs.readdir(pagesDir)
+        const pngFiles = screenshotFiles.filter(f => f.endsWith('.png'))
+        actualScreenshots = pngFiles.length
+
+        if (pngFiles.length > 0) {
+          // Parse filenames to extract page numbers (format: 0000-0001.png)
+          const pageNumbers = pngFiles
+            .map(f => {
+              const match = f.match(/^(\d+)-(\d+)\.png$/)
+              return match ? Number.parseInt(match[2]!, 10) : 0
+            })
+            .filter(p => p > 0)
+            .sort((a, b) => a - b)
+
+        if (pageNumbers.length > 0) {
+          firstPage = pageNumbers[0]!
+          lastPage = pageNumbers.at(-1)!
+          pageRange = `${firstPage} to ${lastPage}`
+        }
+      }
+    } catch (err) {
+      console.warn(`⚠️  Could not analyze pages directory: ${pagesDir}`)
+      if (err instanceof Error) {
+        console.warn(`   Reason: ${err.message}`)
+      }
+      console.warn(`   This may indicate the extraction is incomplete or the directory structure has changed.`)
+    }
+
+      console.warn(`${colors.cyan}📚${colors.reset} Found existing extraction for ASIN: ${colors.yellow}${asin}${colors.reset}`)
+      console.warn(`${colors.blue}📄${colors.reset} Metadata pages: ${colors.green}${existingPages.length}${colors.reset}`)
+      console.warn(`${colors.magenta}🖼️${colors.reset} Actual screenshots: ${colors.green}${actualScreenshots}${colors.reset}`)
+      if (pageRange) {
+        console.warn(`${colors.yellow}📖${colors.reset} Page range: ${colors.bright}${pageRange}${colors.reset}`)
+        // Calculate and explain front/back matter
+        const firstContentPage = firstPage
+        const lastContentPage = lastPage
+        const totalPages = expectedPages
+
+        console.warn(`\n${colors.brightCyan}📖 Book Structure:${colors.reset}`)
+        if (firstContentPage > 1) {
+          const frontMatterPages = firstContentPage - 1
+          console.warn(`  ${colors.dim}📄${colors.reset} Front matter: ${colors.dim}pages 1-${frontMatterPages}${colors.reset}`)
+        }
+        console.warn(`  ${colors.green}📖${colors.reset} Main content: ${colors.brightGreen}pages ${firstContentPage}-${lastContentPage}${colors.reset} ${colors.dim}(${lastContentPage - firstContentPage + 1} pages)${colors.reset}`)
+        if (lastContentPage < totalPages) {
+          const backMatterStart = lastContentPage + 1
+          console.warn(`  ${colors.dim}📄${colors.reset} Back matter: ${colors.dim}pages ${backMatterStart}-${totalPages}${colors.reset}`)
+        }
+        console.warn(`  ${colors.cyan}📚${colors.reset} Total: ${colors.brightCyan}${totalPages} pages${colors.reset}`)
+      }
+
+      // Use the higher count between metadata and actual screenshots
+      const extractedPages = Math.max(existingPages.length, actualScreenshots)
+
+      // Additional validation based on filename analysis
+      if (pageRange && lastPage > 0) {
+        // Check for potential gaps in page sequence
+        const expectedScreenshots = lastPage - firstPage + 1
+        if (actualScreenshots < expectedScreenshots) {
+          console.warn(`⚠️  Potential gaps detected: ${actualScreenshots} screenshots for pages ${pageRange} (expected ${expectedScreenshots})`)
+        }
+
+        // Check if we've reached the expected end
+        if (lastPage >= expectedPages) {
+          console.warn('✅ Extraction appears complete based on page range. Use FORCE=true to re-extract.')
+          return
+        }
+      }
+
+      if (extractedPages >= expectedPages) {
+        console.warn(`${colors.green}✅ Extraction appears complete. Use FORCE=true to re-extract.${colors.reset}`)
+        return
+      } else {
+        console.warn(`${colors.yellow}⚠️  Incomplete extraction detected. Will resume from page ${colors.bright}${extractedPages + 1}${colors.reset}${colors.yellow}...${colors.reset}`)
+      }
+    } catch {
+      console.warn('⚠️  Could not read existing metadata, continuing with fresh extraction...')
+    }
+  }
+
   let userDataDir = path.join(outDir, 'data')
   let pageScreenshotsDir = path.join(outDir, 'pages')
   await fs.mkdir(userDataDir, { recursive: true })
@@ -251,27 +367,36 @@ async function main() {
   }
 
   const parsedToc = parseTocItems(tocItems)
-  // Rename out directory to include book title once known
+  // Rename out directory to include book title once known (if not already renamed)
   try {
     const title = (meta as any)?.title || (meta as any)?.titleText
     if (title) {
       const { sanitizeDirname } = await import('./utils')
       const newDirName = `${asin}-${sanitizeDirname(title)}`
       const newOutDir = path.join('out', newDirName)
+
+      // Only rename if we're not already using the correct directory
       if (path.basename(outDir) !== newDirName) {
+        console.warn(`📁 Renaming directory to include book title: ${newDirName}`)
         try {
           await fs.rename(outDir, newOutDir)
         } catch {
+          // If rename fails, create the new directory and copy files
           await fs.mkdir(newOutDir, { recursive: true })
+          await fs.mkdir(path.join(newOutDir, 'data'), { recursive: true })
+          await fs.mkdir(path.join(newOutDir, 'pages'), { recursive: true })
         }
         outDir = newOutDir
         userDataDir = path.join(outDir, 'data')
         pageScreenshotsDir = path.join(outDir, 'pages')
         await fs.mkdir(userDataDir, { recursive: true })
         await fs.mkdir(pageScreenshotsDir, { recursive: true })
+      } else {
+        console.warn(`📁 Using existing directory with book title: ${path.basename(outDir)}`)
       }
     }
   } catch {}
+
   const toc: TocItem[] = tocItems.map(({ locator: _, ...tocItem }) => tocItem)
 
   const total = parsedToc.firstPageTocItem.total
@@ -290,10 +415,71 @@ async function main() {
   await page.locator('.side-menu-close-button').click()
   await delay(1000)
 
-  const pages: Array<PageChunk> = []
+  // Load existing pages if resuming (we already checked metadata exists above)
+  let pages: Array<PageChunk> = []
+  let startPage = 1
+
+  if (!force && await fileExists(metadataPath)) {
+    try {
+      const existingMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as BookMetadata
+      pages = existingMetadata.pages || []
+
+      // Analyze actual screenshots to determine resume point
+      let actualScreenshots = 0
+      let lastExtractedPage = 0
+
+      try {
+        const screenshotFiles = await fs.readdir(pageScreenshotsDir)
+        const pngFiles = screenshotFiles.filter(f => f.endsWith('.png'))
+        actualScreenshots = pngFiles.length
+
+        if (pngFiles.length > 0) {
+          // Parse filenames to find the highest page number extracted
+          const pageNumbers = pngFiles
+            .map(f => {
+              const match = f.match(/^(\d+)-(\d+)\.png$/)
+              return match ? Number.parseInt(match[2]!, 10) : 0
+            })
+            .filter(p => p > 0)
+
+          if (pageNumbers.length > 0) {
+            lastExtractedPage = Math.max(...pageNumbers)
+          }
+        }
+      } catch (err) {
+        console.warn(`⚠️  Could not analyze existing screenshots in: ${pageScreenshotsDir}`)
+        if (err instanceof Error) {
+          console.warn(`   Reason: ${err.message}`)
+        }
+        console.warn(`   This may indicate the pages directory is missing or corrupted. Will proceed with fresh extraction.`)
+      }
+
+      const extractedPages = Math.max(pages.length, actualScreenshots)
+      if (extractedPages > 0) {
+        // If we have screenshots but no metadata pages, we need to rebuild the pages array
+        if (actualScreenshots > pages.length) {
+          console.warn(`🔄 Found ${actualScreenshots} screenshots but only ${pages.length} metadata entries. Will rebuild metadata...`)
+          pages = [] // Clear pages array to rebuild from screenshots
+        }
+
+        // Use the actual last page extracted from filenames
+        startPage = lastExtractedPage > 0 ? lastExtractedPage + 1 : extractedPages + 1
+        console.warn(`🔄 Resuming extraction from page ${startPage} (last extracted: ${lastExtractedPage})...`)
+      }
+    } catch {
+      console.warn('⚠️  Could not load existing pages, starting fresh...')
+    }
+  }
+
   console.warn(
     `reading ${totalContentPages} pages${total > totalContentPages ? ` (of ${total} total pages stopping at "${parsedToc.afterLastPageTocItem!.title}")` : ''}...`
   )
+
+  // Navigate to start page if resuming
+  if (startPage > 1) {
+    console.warn(`📖 Navigating to page ${startPage}...`)
+    await goToPage(startPage)
+  }
 
   do {
     const pageNav = await getPageNav()
@@ -305,6 +491,46 @@ async function main() {
     }
 
     const index = pages.length
+    const screenshotPath = path.join(
+      pageScreenshotsDir,
+      `${index}`.padStart(pagePadding, '0') +
+        '-' +
+        `${pageNav.page}`.padStart(pagePadding, '0') +
+        '.png'
+    )
+
+    // Skip if screenshot already exists (unless force mode)
+    if (!force && await fileExists(screenshotPath)) {
+      console.warn(`⏭️  Skipping page ${pageNav.page} (already exists)`)
+
+      // Still add to pages array for consistency
+      pages.push({
+        index,
+        page: pageNav.page,
+        total: pageNav.total,
+        screenshot: screenshotPath
+      })
+
+      // Navigate to next page
+      let retries = 0
+      do {
+        try {
+          if (retries % 10 === 0) {
+            await page.locator('.kr-chevron-container-right').click({ timeout: 1000 })
+          }
+          const newSrc = await page.locator(krRendererMainImageSelector).getAttribute('src')
+          const currentSrc = await page.locator(krRendererMainImageSelector).getAttribute('src')
+          if (newSrc !== currentSrc) break
+          await delay(100)
+          ++retries
+        } catch (err: any) {
+          console.warn('unable to navigate to next page; breaking...', err.message)
+          break
+        }
+      } while (retries < 10)
+
+      continue
+    }
 
     const src = await page
       .locator(krRendererMainImageSelector)
@@ -314,13 +540,6 @@ async function main() {
       .locator(krRendererMainImageSelector)
       .screenshot({ type: 'png', scale: 'css' })
 
-    const screenshotPath = path.join(
-      pageScreenshotsDir,
-      `${index}`.padStart(pagePadding, '0') +
-        '-' +
-        `${pageNav.page}`.padStart(pagePadding, '0') +
-        '.png'
-    )
     await fs.writeFile(screenshotPath, b)
     pages.push({
       index,
@@ -389,6 +608,55 @@ async function main() {
   } while (true)
 
   const result: BookMetadata = { info: info!, meta: meta!, toc, pages }
+
+  // Verification: Check if all expected pages were extracted
+  const extractedPages = pages.length
+  const expectedPages = totalContentPages
+  const missingPages = expectedPages - extractedPages
+
+  console.warn('\n=== EXTRACTION VERIFICATION ===')
+  console.warn(`Expected pages: ${expectedPages}`)
+  console.warn(`Extracted pages: ${extractedPages}`)
+  console.warn(`Missing pages: ${missingPages}`)
+
+  if (missingPages > 0) {
+    console.warn(`${colors.red}⚠️  WARNING: ${colors.brightRed}${missingPages} pages were not extracted!${colors.reset}`)
+    console.warn(`${colors.yellow}This might indicate navigation issues or the book ended early.${colors.reset}`)
+    console.warn(`${colors.yellow}Run the script again to continue extraction from where it left off.${colors.reset}`)
+  } else if (extractedPages === expectedPages) {
+    console.warn(`${colors.green}✅ SUCCESS: All expected pages were extracted!${colors.reset}`)
+  } else {
+    console.warn(`${colors.cyan}ℹ️  INFO: Extracted ${colors.bright}${extractedPages}${colors.reset}${colors.cyan} pages (expected ${colors.bright}${expectedPages}${colors.reset}${colors.cyan})${colors.reset}`)
+  }
+
+  // Show page range extracted
+  if (pages.length > 0) {
+    const firstPage = Math.min(...pages.map(p => p.page))
+    const lastPage = Math.max(...pages.map(p => p.page))
+    console.warn(`\n${colors.brightYellow}📖 Extraction Summary:${colors.reset}`)
+    console.warn(`  ${colors.yellow}📖${colors.reset} Page range: ${colors.bright}${firstPage} to ${lastPage}${colors.reset}`)
+
+    // Explain the page structure
+    const totalPages = pages[0]?.total || 0
+    console.warn(`\n${colors.brightCyan}📖 Book Structure:${colors.reset}`)
+    if (firstPage > 1) {
+      const frontMatterPages = firstPage - 1
+      console.warn(`  ${colors.dim}📄${colors.reset} Front matter: ${colors.dim}pages 1-${frontMatterPages}${colors.reset}`)
+    }
+    console.warn(`  ${colors.green}📖${colors.reset} Main content: ${colors.brightGreen}pages ${firstPage}-${lastPage}${colors.reset} ${colors.dim}(${lastPage - firstPage + 1} pages)${colors.reset}`)
+    if (lastPage < totalPages) {
+      const backMatterStart = lastPage + 1
+      console.warn(`  ${colors.dim}📄${colors.reset} Back matter: ${colors.dim}pages ${backMatterStart}-${totalPages}${colors.reset}`)
+    }
+    console.warn(`  ${colors.cyan}📚${colors.reset} Total: ${colors.brightCyan}${totalPages} pages${colors.reset}`)
+  }
+
+  if (startPage > 1) {
+    console.warn(`🔄 This was a resumed extraction starting from page ${startPage}`)
+  }
+
+  console.warn('===============================\n')
+
   await fs.writeFile(
     path.join(outDir, 'metadata.json'),
     JSON.stringify(result, null, 2)

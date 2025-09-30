@@ -61,6 +61,10 @@ export async function resolveOutDir(asin: string): Promise<string> {
     const entries = (await fs.readdir(baseOutDir, {
       withFileTypes: true
     } as any)) as unknown as Dirent[]
+
+    // Look for directories that start with ASIN (supports both old and new formats)
+    // Old format: "ASIN"
+    // New format: "ASIN-Book Title"
     const match = entries.find(
       (e) => e.isDirectory() && e.name.toLowerCase().startsWith(asin.toLowerCase())
     )

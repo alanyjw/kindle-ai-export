@@ -51,15 +51,50 @@ async function main() {
   const pageScreenshots = await globby(`${pageScreenshotsDir}/*.png`)
   assert(pageScreenshots.length, `no page screenshots found: ${pageScreenshotsDir}`)
 
+  // Idempotency: load existing content if present and skip already-processed screenshots
+  const contentPath = path.join(outDir, 'content.json')
+  let existingContent: ContentChunk[] = []
+  try {
+    const existingRaw = await fs.readFile(contentPath, 'utf8')
+    const parsed = JSON.parse(existingRaw)
+    if (Array.isArray(parsed)) {
+      existingContent = parsed as ContentChunk[]
+    }
+  } catch {}
+
+  const processedScreenshots = new Set<string>(
+    existingContent.map((c) => c.screenshot)
+  )
+  const screenshotsToProcess = pageScreenshots.filter(
+    (s) => !processedScreenshots.has(s)
+  )
+
+  if (screenshotsToProcess.length === 0) {
+    console.warn('✅ Nothing to transcribe; content.json is already up to date.')
+    // Ensure file exists and is normalized
+    await fs.writeFile(
+      contentPath,
+      JSON.stringify(
+        [...existingContent].sort((a, b) => a.index - b.index || a.page - b.page),
+        null,
+        2
+      )
+    )
+    console.log(JSON.stringify(existingContent, null, 2))
+    return
+  }
+
   const openai = new OpenAIClient()
 
   const content: ContentChunk[] = (
     await pMap(
-      pageScreenshots,
+      screenshotsToProcess,
       async (screenshot) => {
         const screenshotBuffer = await fs.readFile(screenshot)
         const screenshotBase64 = `data:image/png;base64,${screenshotBuffer.toString('base64')}`
-        const metadataMatch = screenshot.match(/0*(\d+)-\0*(\d+).png/)
+        // Filenames are like "0000-0001.png" where the first is index and the second is page
+        // Robustly capture both numbers ignoring any leading zeros
+        const metadataMatch = screenshot.match(/(?:^|\/)\d*-?(\d+)-(\d+)\.png$/)
         assert(
           metadataMatch?.[1] && metadataMatch?.[2],
           `invalid screenshot filename: ${screenshot}`
@@ -179,11 +214,13 @@ Do not include any additional text, descriptions, or punctuation. Ignore any emb
     )
   ).filter(Boolean)
 
-  await fs.writeFile(
-    path.join(outDir, 'content.json'),
-    JSON.stringify(content, null, 2)
-  )
-  console.log(JSON.stringify(content, null, 2))
+  // Merge with existing content, sort deterministically, and write
+  const merged: ContentChunk[] = (
+    [...existingContent, ...content] as ContentChunk[]
+  ).sort((a, b) => a.index - b.index || a.page - b.page)
+
+  await fs.writeFile(contentPath, JSON.stringify(merged, null, 2))
+  console.log(JSON.stringify(merged, null, 2))
 }
 
 await main()
