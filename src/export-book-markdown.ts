@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { BookMetadata, ContentChunk } from './types'
-import { assert, getEnv, resolveOutDir } from './utils'
+import { assert, getEnv, resolveOutDir, sanitizeDirname } from './utils'
 
 async function main() {
   const asin = getEnv('ASIN')
@@ -85,7 +85,10 @@ ${text}`
     index = nextIndex
   }
 
-  await fs.writeFile(path.join(outDir, 'book.md'), output)
+  const safeTitle = sanitizeDirname(title || asin)
+  const markdownPath = path.join(outDir, `${safeTitle}.md`)
+
+  await fs.writeFile(markdownPath, output)
   console.log(output)
 }
 
