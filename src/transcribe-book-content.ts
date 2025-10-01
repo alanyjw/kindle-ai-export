@@ -27,7 +27,7 @@ function isRetryableError(error: any): boolean {
   if (!error) return false
 
   // Check for rate limit errors
-  if (error.status === 429) return true
+  if (error.status === 429 && error.type === 'tokens') return true
 
   // Check for server errors (5xx)
   if (error.status >= 500 && error.status < 600) return true
