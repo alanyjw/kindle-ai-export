@@ -4,13 +4,14 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { BookMetadata, ContentChunk } from './types'
-import { assert, getEnv, resolveOutDir, sanitizeDirname } from './utils'
+import { assert, createProgressBar, getEnv, progressBarNewline, resolveOutDir, sanitizeDirname, setupTimestampedLogger } from './utils'
 
 async function main() {
   const asin = getEnv('ASIN')
   assert(asin, 'ASIN is required')
 
   const outDir = await resolveOutDir(asin)
+  await setupTimestampedLogger(outDir)
 
   const content = JSON.parse(
     await fs.readFile(path.join(outDir, 'content.json'), 'utf8')
@@ -38,6 +39,12 @@ async function main() {
 
     lastTocItemIndex = i
   }
+
+  // Progress bar over processable TOC items
+  const processableToc = metadata.toc
+    .filter((tocItem, index) => tocItem.page !== undefined && index <= lastTocItemIndex)
+  const totalSections = processableToc.length
+  const bar = createProgressBar(totalSections)
 
   let output = `# ${title}
 
@@ -83,13 +90,17 @@ ${metadata.toc
 ${text}`
 
     index = nextIndex
+    if (processableToc.includes(tocItem)) bar.tick(1)
   }
+
+  progressBarNewline()
 
   const safeTitle = sanitizeDirname(title || asin)
   const markdownPath = path.join(outDir, `${safeTitle}.md`)
 
   await fs.writeFile(markdownPath, output)
-  console.log(output)
+  console.log(`Export complete. Wrote markdown to: ${markdownPath}`)
+  console.log(`TOC sections processed: ${totalSections}`)
 }
 
 await main()

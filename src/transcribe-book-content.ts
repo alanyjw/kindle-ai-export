@@ -8,7 +8,7 @@ import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
 import type { ContentChunk } from './types'
-import { assert, getEnv, resolveOutDir } from './utils'
+import { assert, createProgressBar, getEnv, progressBarNewline, resolveOutDir, setupTimestampedLogger } from './utils'
 
 // Utility function for exponential backoff with jitter
 function sleep(ms: number): Promise<void> {
@@ -51,6 +51,8 @@ async function main() {
   const pageScreenshots = await globby(`${pageScreenshotsDir}/*.png`)
   assert(pageScreenshots.length, `no page screenshots found: ${pageScreenshotsDir}`)
 
+  await setupTimestampedLogger(outDir)
+
   // Idempotency: load existing content if present and skip already-processed screenshots
   const contentPath = path.join(outDir, 'content.json')
   let existingContent: ContentChunk[] = []
@@ -85,6 +87,10 @@ async function main() {
   }
 
   const openai = new OpenAIClient()
+
+  // Progress bar setup
+  const totalScreens = screenshotsToProcess.length
+  const bar = createProgressBar(totalScreens)
 
   const content: ContentChunk[] = (
     await pMap(
@@ -182,6 +188,9 @@ Do not include any additional text, descriptions, or punctuation. Ignore any emb
               }
               console.log(result)
 
+              // Update progress bar for this run
+              bar.tick(1)
+
               return result
             } catch (err: any) {
               retries++
@@ -221,6 +230,8 @@ Do not include any additional text, descriptions, or punctuation. Ignore any emb
 
   await fs.writeFile(contentPath, JSON.stringify(merged, null, 2))
   console.log(JSON.stringify(merged, null, 2))
+
+  progressBarNewline()
 }
 
 await main()

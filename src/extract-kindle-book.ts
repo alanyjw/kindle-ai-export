@@ -54,8 +54,9 @@ async function main() {
   assert(amazonPassword, 'AMAZON_PASSWORD is required')
 
   // Check if extraction already exists and is complete (OFFLINE CHECK)
-  const { resolveOutDir, fileExists } = await import('./utils')
+  const { resolveOutDir, fileExists, setupTimestampedLogger, createProgressBar, progressBarNewline } = await import('./utils')
   let outDir = await resolveOutDir(asin)
+  await setupTimestampedLogger(outDir)
   const metadataPath = path.join(outDir, 'metadata.json')
   const pagesDir = path.join(outDir, 'pages')
 
@@ -481,6 +482,12 @@ async function main() {
     await goToPage(startPage)
   }
 
+  // Progress bar setup
+  const currentNavAtStart = await getPageNav()
+  const startAtPage = currentNavAtStart?.page ?? startPage
+  const totalToRead = Math.max(0, totalContentPages - startAtPage)
+  const bar = createProgressBar(totalToRead)
+
   do {
     const pageNav = await getPageNav()
     if (pageNav?.page === undefined) {
@@ -510,6 +517,9 @@ async function main() {
         total: pageNav.total,
         screenshot: screenshotPath
       })
+
+      // Update progress bar for this run
+      bar.tick(1)
 
       // Navigate to next page
       let retries = 0
@@ -549,6 +559,9 @@ async function main() {
     })
 
     console.warn(pages.at(-1))
+
+    // Update progress bar for this run
+    bar.tick(1)
 
     // Navigation is very spotty without this delay; I think it may be due to
     // the screenshot changing the DOM temporarily and not being stable yet.
@@ -606,6 +619,8 @@ async function main() {
       ++retries
     } while (true)
   } while (true)
+
+  progressBarNewline()
 
   const result: BookMetadata = { info: info!, meta: meta!, toc, pages }
 

@@ -74,6 +74,72 @@ export async function resolveOutDir(asin: string): Promise<string> {
   return path.join(baseOutDir, asin)
 }
 
+// Create a timestamped log file in the given outDir and redirect console output to it.
+// Returns the path of the log file and a function to append custom messages.
+export async function setupTimestampedLogger(outDir: string) {
+  const logsDir = path.join(outDir, 'logs')
+  await fs.mkdir(logsDir, { recursive: true })
+  const now = new Date()
+  const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`
+  const logPath = path.join(logsDir, `${timestamp}.log`)
+
+  const append = (message: string) => {
+    void fs.appendFile(logPath, message + '\n').catch(() => {})
+  }
+  const formatArgs = (args: any[]) =>
+    args
+      .map((a) => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a) } catch { return String(a) } })()))
+      .join(' ')
+
+  console.log = (...args: any[]) => append(formatArgs(args))
+  console.warn = (...args: any[]) => append(formatArgs(args))
+  console.error = (...args: any[]) => append(formatArgs(args))
+
+  return { logPath, append }
+}
+
+// A simple terminal progress bar helper
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n))
+}
+
+export function createProgressBar(total: number, width = 30) {
+  let completed = 0
+
+  function render() {
+    const safeTotal = Math.max(0, total)
+    let ratio = safeTotal > 0 ? completed / safeTotal : 1
+    ratio = clamp(ratio, 0, 1)
+    const filled = Math.round(width * ratio)
+    const bar = `${'='.repeat(Math.max(0, filled - 1))}${filled > 0 ? '>' : ''}${'.'.repeat(Math.max(0, width - filled))}`
+    const pct = String(Math.round(ratio * 100)).padStart(3, ' ') + '%'
+    if (process.stdout.isTTY) {
+      process.stdout.write(`\r[${bar}] ${pct} (${completed}/${safeTotal})`)
+    }
+  }
+
+  function tick(amount = 1) {
+    completed += amount
+    render()
+  }
+
+  function set(value: number) {
+    completed = value
+    render()
+  }
+
+  // initial render
+  render()
+
+  return { tick, set, done: progressBarNewline }
+}
+
+export function progressBarNewline() {
+  if (process.stdout.isTTY) {
+    process.stdout.write('\n')
+  }
+}
+
 export type FfmpegProgressEvent = {
   frames: number
   currentFps: number
