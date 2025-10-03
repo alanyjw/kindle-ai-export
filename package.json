@@ -9,7 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/transitive-bullshit/kindle-ai-export.git"
   },
-  "packageManager": "pnpm@9.11.0",
+  "packageManager": "pnpm@10.18.0",
   "engines": {
     "node": ">=18"
   },
