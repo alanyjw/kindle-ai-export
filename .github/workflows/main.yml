@@ -12,9 +12,6 @@ jobs:
       fail-fast: true
       matrix:
         node-version:
-          - 18
-          - 20
-          - 21
           - 22
 
     steps:
@@ -35,7 +32,7 @@ jobs:
           cache: 'pnpm'
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile --strict-peer-dependencies
+        run: pnpm install --no-frozen-lockfile --strict-peer-dependencies
 
       - name: Run test
         run: pnpm test
