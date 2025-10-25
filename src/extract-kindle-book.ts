@@ -54,17 +54,26 @@ async function main() {
   assert(amazonPassword, 'AMAZON_PASSWORD is required')
 
   // Check if extraction already exists and is complete (OFFLINE CHECK)
-  const { resolveOutDir, fileExists, setupTimestampedLogger, createProgressBar, progressBarNewline } = await import('./utils')
+  const {
+    resolveOutDir,
+    fileExists,
+    setupTimestampedLogger,
+    createProgressBar,
+    progressBarNewline
+  } = await import('./utils')
   let outDir = await resolveOutDir(asin)
   await setupTimestampedLogger(outDir)
   const metadataPath = path.join(outDir, 'metadata.json')
   const pagesDir = path.join(outDir, 'pages')
 
-  if (!force && await fileExists(metadataPath)) {
+  if (!force && (await fileExists(metadataPath))) {
     try {
-      const existingMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as BookMetadata
+      const existingMetadata = JSON.parse(
+        await fs.readFile(metadataPath, 'utf8')
+      ) as BookMetadata
       const existingPages = existingMetadata.pages || []
-      const expectedPages = (existingMetadata.meta as any)?.totalPages || existingPages.length
+      const expectedPages =
+        (existingMetadata.meta as any)?.totalPages || existingPages.length
 
       // Analyze screenshot files to understand extraction progress
       let actualScreenshots = 0
@@ -74,38 +83,48 @@ async function main() {
 
       try {
         const screenshotFiles = await fs.readdir(pagesDir)
-        const pngFiles = screenshotFiles.filter(f => f.endsWith('.png'))
+        const pngFiles = screenshotFiles.filter((f) => f.endsWith('.png'))
         actualScreenshots = pngFiles.length
 
         if (pngFiles.length > 0) {
           // Parse filenames to extract page numbers (format: 0000-0001.png)
           const pageNumbers = pngFiles
-            .map(f => {
+            .map((f) => {
               const match = f.match(/^(\d+)-(\d+)\.png$/)
               return match ? Number.parseInt(match[2]!, 10) : 0
             })
-            .filter(p => p > 0)
+            .filter((p) => p > 0)
             .sort((a, b) => a - b)
 
-        if (pageNumbers.length > 0) {
-          firstPage = pageNumbers[0]!
-          lastPage = pageNumbers.at(-1)!
-          pageRange = `${firstPage} to ${lastPage}`
+          if (pageNumbers.length > 0) {
+            firstPage = pageNumbers[0]!
+            lastPage = pageNumbers.at(-1)!
+            pageRange = `${firstPage} to ${lastPage}`
+          }
         }
+      } catch (err) {
+        console.warn(`⚠️  Could not analyze pages directory: ${pagesDir}`)
+        if (err instanceof Error) {
+          console.warn(`   Reason: ${err.message}`)
+        }
+        console.warn(
+          `   This may indicate the extraction is incomplete or the directory structure has changed.`
+        )
       }
-    } catch (err) {
-      console.warn(`⚠️  Could not analyze pages directory: ${pagesDir}`)
-      if (err instanceof Error) {
-        console.warn(`   Reason: ${err.message}`)
-      }
-      console.warn(`   This may indicate the extraction is incomplete or the directory structure has changed.`)
-    }
 
-      console.warn(`${colors.cyan}📚${colors.reset} Found existing extraction for ASIN: ${colors.yellow}${asin}${colors.reset}`)
-      console.warn(`${colors.blue}📄${colors.reset} Metadata pages: ${colors.green}${existingPages.length}${colors.reset}`)
-      console.warn(`${colors.magenta}🖼️${colors.reset} Actual screenshots: ${colors.green}${actualScreenshots}${colors.reset}`)
+      console.warn(
+        `${colors.cyan}📚${colors.reset} Found existing extraction for ASIN: ${colors.yellow}${asin}${colors.reset}`
+      )
+      console.warn(
+        `${colors.blue}📄${colors.reset} Metadata pages: ${colors.green}${existingPages.length}${colors.reset}`
+      )
+      console.warn(
+        `${colors.magenta}🖼️${colors.reset} Actual screenshots: ${colors.green}${actualScreenshots}${colors.reset}`
+      )
       if (pageRange) {
-        console.warn(`${colors.yellow}📖${colors.reset} Page range: ${colors.bright}${pageRange}${colors.reset}`)
+        console.warn(
+          `${colors.yellow}📖${colors.reset} Page range: ${colors.bright}${pageRange}${colors.reset}`
+        )
         // Calculate and explain front/back matter
         const firstContentPage = firstPage
         const lastContentPage = lastPage
@@ -114,14 +133,22 @@ async function main() {
         console.warn(`\n${colors.brightCyan}📖 Book Structure:${colors.reset}`)
         if (firstContentPage > 1) {
           const frontMatterPages = firstContentPage - 1
-          console.warn(`  ${colors.dim}📄${colors.reset} Front matter: ${colors.dim}pages 1-${frontMatterPages}${colors.reset}`)
+          console.warn(
+            `  ${colors.dim}📄${colors.reset} Front matter: ${colors.dim}pages 1-${frontMatterPages}${colors.reset}`
+          )
         }
-        console.warn(`  ${colors.green}📖${colors.reset} Main content: ${colors.brightGreen}pages ${firstContentPage}-${lastContentPage}${colors.reset} ${colors.dim}(${lastContentPage - firstContentPage + 1} pages)${colors.reset}`)
+        console.warn(
+          `  ${colors.green}📖${colors.reset} Main content: ${colors.brightGreen}pages ${firstContentPage}-${lastContentPage}${colors.reset} ${colors.dim}(${lastContentPage - firstContentPage + 1} pages)${colors.reset}`
+        )
         if (lastContentPage < totalPages) {
           const backMatterStart = lastContentPage + 1
-          console.warn(`  ${colors.dim}📄${colors.reset} Back matter: ${colors.dim}pages ${backMatterStart}-${totalPages}${colors.reset}`)
+          console.warn(
+            `  ${colors.dim}📄${colors.reset} Back matter: ${colors.dim}pages ${backMatterStart}-${totalPages}${colors.reset}`
+          )
         }
-        console.warn(`  ${colors.cyan}📚${colors.reset} Total: ${colors.brightCyan}${totalPages} pages${colors.reset}`)
+        console.warn(
+          `  ${colors.cyan}📚${colors.reset} Total: ${colors.brightCyan}${totalPages} pages${colors.reset}`
+        )
       }
 
       // Use the higher count between metadata and actual screenshots
@@ -132,24 +159,34 @@ async function main() {
         // Check for potential gaps in page sequence
         const expectedScreenshots = lastPage - firstPage + 1
         if (actualScreenshots < expectedScreenshots) {
-          console.warn(`⚠️  Potential gaps detected: ${actualScreenshots} screenshots for pages ${pageRange} (expected ${expectedScreenshots})`)
+          console.warn(
+            `⚠️  Potential gaps detected: ${actualScreenshots} screenshots for pages ${pageRange} (expected ${expectedScreenshots})`
+          )
         }
 
         // Check if we've reached the expected end
         if (lastPage >= expectedPages) {
-          console.warn('✅ Extraction appears complete based on page range. Use FORCE=true to re-extract.')
+          console.warn(
+            '✅ Extraction appears complete based on page range. Use FORCE=true to re-extract.'
+          )
           return
         }
       }
 
       if (extractedPages >= expectedPages) {
-        console.warn(`${colors.green}✅ Extraction appears complete. Use FORCE=true to re-extract.${colors.reset}`)
+        console.warn(
+          `${colors.green}✅ Extraction appears complete. Use FORCE=true to re-extract.${colors.reset}`
+        )
         return
       } else {
-        console.warn(`${colors.yellow}⚠️  Incomplete extraction detected. Will resume from page ${colors.bright}${extractedPages + 1}${colors.reset}${colors.yellow}...${colors.reset}`)
+        console.warn(
+          `${colors.yellow}⚠️  Incomplete extraction detected. Will resume from page ${colors.bright}${extractedPages + 1}${colors.reset}${colors.yellow}...${colors.reset}`
+        )
       }
     } catch {
-      console.warn('⚠️  Could not read existing metadata, continuing with fresh extraction...')
+      console.warn(
+        '⚠️  Could not read existing metadata, continuing with fresh extraction...'
+      )
     }
   }
 
@@ -378,7 +415,9 @@ async function main() {
 
       // Only rename if we're not already using the correct directory
       if (path.basename(outDir) !== newDirName) {
-        console.warn(`📁 Renaming directory to include book title: ${newDirName}`)
+        console.warn(
+          `📁 Renaming directory to include book title: ${newDirName}`
+        )
         try {
           await fs.rename(outDir, newOutDir)
         } catch {
@@ -393,7 +432,9 @@ async function main() {
         await fs.mkdir(userDataDir, { recursive: true })
         await fs.mkdir(pageScreenshotsDir, { recursive: true })
       } else {
-        console.warn(`📁 Using existing directory with book title: ${path.basename(outDir)}`)
+        console.warn(
+          `📁 Using existing directory with book title: ${path.basename(outDir)}`
+        )
       }
     }
   } catch {}
@@ -420,9 +461,11 @@ async function main() {
   let pages: Array<PageChunk> = []
   let startPage = 1
 
-  if (!force && await fileExists(metadataPath)) {
+  if (!force && (await fileExists(metadataPath))) {
     try {
-      const existingMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as BookMetadata
+      const existingMetadata = JSON.parse(
+        await fs.readFile(metadataPath, 'utf8')
+      ) as BookMetadata
       pages = existingMetadata.pages || []
 
       // Analyze actual screenshots to determine resume point
@@ -431,41 +474,50 @@ async function main() {
 
       try {
         const screenshotFiles = await fs.readdir(pageScreenshotsDir)
-        const pngFiles = screenshotFiles.filter(f => f.endsWith('.png'))
+        const pngFiles = screenshotFiles.filter((f) => f.endsWith('.png'))
         actualScreenshots = pngFiles.length
 
         if (pngFiles.length > 0) {
           // Parse filenames to find the highest page number extracted
           const pageNumbers = pngFiles
-            .map(f => {
+            .map((f) => {
               const match = f.match(/^(\d+)-(\d+)\.png$/)
               return match ? Number.parseInt(match[2]!, 10) : 0
             })
-            .filter(p => p > 0)
+            .filter((p) => p > 0)
 
           if (pageNumbers.length > 0) {
             lastExtractedPage = Math.max(...pageNumbers)
           }
         }
       } catch (err) {
-        console.warn(`⚠️  Could not analyze existing screenshots in: ${pageScreenshotsDir}`)
+        console.warn(
+          `⚠️  Could not analyze existing screenshots in: ${pageScreenshotsDir}`
+        )
         if (err instanceof Error) {
           console.warn(`   Reason: ${err.message}`)
         }
-        console.warn(`   This may indicate the pages directory is missing or corrupted. Will proceed with fresh extraction.`)
+        console.warn(
+          `   This may indicate the pages directory is missing or corrupted. Will proceed with fresh extraction.`
+        )
       }
 
       const extractedPages = Math.max(pages.length, actualScreenshots)
       if (extractedPages > 0) {
         // If we have screenshots but no metadata pages, we need to rebuild the pages array
         if (actualScreenshots > pages.length) {
-          console.warn(`🔄 Found ${actualScreenshots} screenshots but only ${pages.length} metadata entries. Will rebuild metadata...`)
+          console.warn(
+            `🔄 Found ${actualScreenshots} screenshots but only ${pages.length} metadata entries. Will rebuild metadata...`
+          )
           pages = [] // Clear pages array to rebuild from screenshots
         }
 
         // Use the actual last page extracted from filenames
-        startPage = lastExtractedPage > 0 ? lastExtractedPage + 1 : extractedPages + 1
-        console.warn(`🔄 Resuming extraction from page ${startPage} (last extracted: ${lastExtractedPage})...`)
+        startPage =
+          lastExtractedPage > 0 ? lastExtractedPage + 1 : extractedPages + 1
+        console.warn(
+          `🔄 Resuming extraction from page ${startPage} (last extracted: ${lastExtractedPage})...`
+        )
       }
     } catch {
       console.warn('⚠️  Could not load existing pages, starting fresh...')
@@ -507,7 +559,7 @@ async function main() {
     )
 
     // Skip if screenshot already exists (unless force mode)
-    if (!force && await fileExists(screenshotPath)) {
+    if (!force && (await fileExists(screenshotPath))) {
       console.warn(`⏭️  Skipping page ${pageNav.page} (already exists)`)
 
       // Still add to pages array for consistency
@@ -526,15 +578,24 @@ async function main() {
       do {
         try {
           if (retries % 10 === 0) {
-            await page.locator('.kr-chevron-container-right').click({ timeout: 1000 })
+            await page
+              .locator('.kr-chevron-container-right')
+              .click({ timeout: 1000 })
           }
-          const newSrc = await page.locator(krRendererMainImageSelector).getAttribute('src')
-          const currentSrc = await page.locator(krRendererMainImageSelector).getAttribute('src')
+          const newSrc = await page
+            .locator(krRendererMainImageSelector)
+            .getAttribute('src')
+          const currentSrc = await page
+            .locator(krRendererMainImageSelector)
+            .getAttribute('src')
           if (newSrc !== currentSrc) break
           await delay(100)
           ++retries
         } catch (err: any) {
-          console.warn('unable to navigate to next page; breaking...', err.message)
+          console.warn(
+            'unable to navigate to next page; breaking...',
+            err.message
+          )
           break
         }
       } while (retries < 10)
@@ -635,39 +696,63 @@ async function main() {
   console.warn(`Missing pages: ${missingPages}`)
 
   if (missingPages > 0) {
-    console.warn(`${colors.red}⚠️  WARNING: ${colors.brightRed}${missingPages} pages were not extracted!${colors.reset}`)
-    console.warn(`${colors.yellow}This might indicate navigation issues or the book ended early.${colors.reset}`)
-    console.warn(`${colors.yellow}Run the script again to continue extraction from where it left off.${colors.reset}`)
+    console.warn(
+      `${colors.red}⚠️  WARNING: ${colors.brightRed}${missingPages} pages were not extracted!${colors.reset}`
+    )
+    console.warn(
+      `${colors.yellow}This might indicate navigation issues or the book ended early.${colors.reset}`
+    )
+    console.warn(
+      `${colors.yellow}Run the script again to continue extraction from where it left off.${colors.reset}`
+    )
   } else if (extractedPages === expectedPages) {
-    console.warn(`${colors.green}✅ SUCCESS: All expected pages were extracted!${colors.reset}`)
+    console.warn(
+      `${colors.green}✅ SUCCESS: All expected pages were extracted!${colors.reset}`
+    )
   } else {
-    console.warn(`${colors.cyan}ℹ️  INFO: Extracted ${colors.bright}${extractedPages}${colors.reset}${colors.cyan} pages (expected ${colors.bright}${expectedPages}${colors.reset}${colors.cyan})${colors.reset}`)
+    console.warn(
+      `${colors.cyan}ℹ️  INFO: Extracted ${colors.bright}${extractedPages}${colors.reset}${colors.cyan} pages (expected ${colors.bright}${expectedPages}${colors.reset}${colors.cyan})${colors.reset}`
+    )
   }
 
   // Show page range extracted
   if (pages.length > 0) {
-    const firstPage = Math.min(...pages.map(p => p.page))
-    const lastPage = Math.max(...pages.map(p => p.page))
-    console.warn(`\n${colors.brightYellow}📖 Extraction Summary:${colors.reset}`)
-    console.warn(`  ${colors.yellow}📖${colors.reset} Page range: ${colors.bright}${firstPage} to ${lastPage}${colors.reset}`)
+    const firstPage = Math.min(...pages.map((p) => p.page))
+    const lastPage = Math.max(...pages.map((p) => p.page))
+    console.warn(
+      `\n${colors.brightYellow}📖 Extraction Summary:${colors.reset}`
+    )
+    console.warn(
+      `  ${colors.yellow}📖${colors.reset} Page range: ${colors.bright}${firstPage} to ${lastPage}${colors.reset}`
+    )
 
     // Explain the page structure
     const totalPages = pages[0]?.total || 0
     console.warn(`\n${colors.brightCyan}📖 Book Structure:${colors.reset}`)
     if (firstPage > 1) {
       const frontMatterPages = firstPage - 1
-      console.warn(`  ${colors.dim}📄${colors.reset} Front matter: ${colors.dim}pages 1-${frontMatterPages}${colors.reset}`)
+      console.warn(
+        `  ${colors.dim}📄${colors.reset} Front matter: ${colors.dim}pages 1-${frontMatterPages}${colors.reset}`
+      )
     }
-    console.warn(`  ${colors.green}📖${colors.reset} Main content: ${colors.brightGreen}pages ${firstPage}-${lastPage}${colors.reset} ${colors.dim}(${lastPage - firstPage + 1} pages)${colors.reset}`)
+    console.warn(
+      `  ${colors.green}📖${colors.reset} Main content: ${colors.brightGreen}pages ${firstPage}-${lastPage}${colors.reset} ${colors.dim}(${lastPage - firstPage + 1} pages)${colors.reset}`
+    )
     if (lastPage < totalPages) {
       const backMatterStart = lastPage + 1
-      console.warn(`  ${colors.dim}📄${colors.reset} Back matter: ${colors.dim}pages ${backMatterStart}-${totalPages}${colors.reset}`)
+      console.warn(
+        `  ${colors.dim}📄${colors.reset} Back matter: ${colors.dim}pages ${backMatterStart}-${totalPages}${colors.reset}`
+      )
     }
-    console.warn(`  ${colors.cyan}📚${colors.reset} Total: ${colors.brightCyan}${totalPages} pages${colors.reset}`)
+    console.warn(
+      `  ${colors.cyan}📚${colors.reset} Total: ${colors.brightCyan}${totalPages} pages${colors.reset}`
+    )
   }
 
   if (startPage > 1) {
-    console.warn(`🔄 This was a resumed extraction starting from page ${startPage}`)
+    console.warn(
+      `🔄 This was a resumed extraction starting from page ${startPage}`
+    )
   }
 
   console.warn('===============================\n')

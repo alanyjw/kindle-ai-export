@@ -66,7 +66,8 @@ export async function resolveOutDir(asin: string): Promise<string> {
     // Old format: "ASIN"
     // New format: "ASIN-Book Title"
     const match = entries.find(
-      (e) => e.isDirectory() && e.name.toLowerCase().startsWith(asin.toLowerCase())
+      (e) =>
+        e.isDirectory() && e.name.toLowerCase().startsWith(asin.toLowerCase())
     )
     if (match) return path.join(baseOutDir, match.name)
   } catch {}
@@ -88,7 +89,17 @@ export async function setupTimestampedLogger(outDir: string) {
   }
   const formatArgs = (args: any[]) =>
     args
-      .map((a) => (typeof a === 'string' ? a : (() => { try { return JSON.stringify(a) } catch { return String(a) } })()))
+      .map((a) =>
+        typeof a === 'string'
+          ? a
+          : (() => {
+              try {
+                return JSON.stringify(a)
+              } catch {
+                return String(a)
+              }
+            })()
+      )
       .join(' ')
 
   console.log = (...args: any[]) => append(formatArgs(args))

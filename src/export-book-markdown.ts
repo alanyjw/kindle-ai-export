@@ -4,7 +4,15 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import type { BookMetadata, ContentChunk } from './types'
-import { assert, createProgressBar, getEnv, progressBarNewline, resolveOutDir, sanitizeDirname, setupTimestampedLogger } from './utils'
+import {
+  assert,
+  createProgressBar,
+  getEnv,
+  progressBarNewline,
+  resolveOutDir,
+  sanitizeDirname,
+  setupTimestampedLogger
+} from './utils'
 
 async function main() {
   const asin = getEnv('ASIN')

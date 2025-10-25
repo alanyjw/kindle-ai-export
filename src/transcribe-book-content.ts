@@ -8,15 +8,26 @@ import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
 import type { ContentChunk } from './types'
-import { assert, createProgressBar, getEnv, progressBarNewline, resolveOutDir, setupTimestampedLogger } from './utils'
+import {
+  assert,
+  createProgressBar,
+  getEnv,
+  progressBarNewline,
+  resolveOutDir,
+  setupTimestampedLogger
+} from './utils'
 
 // Utility function for exponential backoff with jitter
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 // Calculate delay with exponential backoff and jitter
-function calculateBackoffDelay(attempt: number, baseDelay = 1000, maxDelay = 30_000): number {
+function calculateBackoffDelay(
+  attempt: number,
+  baseDelay = 1000,
+  maxDelay = 30_000
+): number {
   const exponentialDelay = baseDelay * Math.pow(2, attempt - 1)
   const jitter = Math.random() * 0.1 * exponentialDelay // Add up to 10% jitter
   return Math.min(exponentialDelay + jitter, maxDelay)
@@ -37,7 +48,12 @@ function isRetryableError(error: any): boolean {
   if (error.type === 'invalid_request_error') return false // Don't retry invalid requests
 
   // Check for network errors
-  if (error.code === 'ECONNRESET' || error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') return true
+  if (
+    error.code === 'ECONNRESET' ||
+    error.code === 'ENOTFOUND' ||
+    error.code === 'ECONNREFUSED'
+  )
+    return true
 
   return false
 }
@@ -49,7 +65,10 @@ async function main() {
   const outDir = await resolveOutDir(asin)
   const pageScreenshotsDir = path.join(outDir, 'pages')
   const pageScreenshots = await globby(`${pageScreenshotsDir}/*.png`)
-  assert(pageScreenshots.length, `no page screenshots found: ${pageScreenshotsDir}`)
+  assert(
+    pageScreenshots.length,
+    `no page screenshots found: ${pageScreenshotsDir}`
+  )
 
   await setupTimestampedLogger(outDir)
 
@@ -72,12 +91,16 @@ async function main() {
   )
 
   if (screenshotsToProcess.length === 0) {
-    console.warn('✅ Nothing to transcribe; content.json is already up to date.')
+    console.warn(
+      '✅ Nothing to transcribe; content.json is already up to date.'
+    )
     // Ensure file exists and is normalized
     await fs.writeFile(
       contentPath,
       JSON.stringify(
-        [...existingContent].sort((a, b) => a.index - b.index || a.page - b.page),
+        [...existingContent].sort(
+          (a, b) => a.index - b.index || a.page - b.page
+        ),
         null,
         2
       )
@@ -153,7 +176,11 @@ Do not include any additional text, descriptions, or punctuation. Ignore any emb
                 retries++
                 if (retries < maxRetries) {
                   const delay = calculateBackoffDelay(retries)
-                  console.warn(`Empty response, retrying in ${delay}ms...`, { index, retries, screenshot })
+                  console.warn(`Empty response, retrying in ${delay}ms...`, {
+                    index,
+                    retries,
+                    screenshot
+                  })
                   await sleep(delay)
                   continue
                 }
@@ -175,7 +202,13 @@ Do not include any additional text, descriptions, or punctuation. Ignore any emb
                 // "gpt-4o-mini". If we suspect a refusal, we'll retry with a
                 // higher temperature and cross our fingers.
                 const delay = calculateBackoffDelay(retries)
-                console.warn('retrying refusal...', { index, text, screenshot, retries, delay })
+                console.warn('retrying refusal...', {
+                  index,
+                  text,
+                  screenshot,
+                  retries,
+                  delay
+                })
                 await sleep(delay)
                 continue
               }
