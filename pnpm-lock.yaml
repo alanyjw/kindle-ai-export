@@ -54,8 +54,8 @@ importers:
         specifier: ^1.55.1
         version: 1.55.1
       playwright-core:
-        specifier: ^1.55.1
-        version: 1.55.1
+        specifier: ^1.48.0
+        version: 1.48.0
       unrealspeech-api:
         specifier: ^1.0.2
         version: 1.0.2
@@ -359,77 +359,10 @@ packages:
       '@types/node': '>=18'
 
   '@jridgewell/sourcemap-codec@1.5.5':
-    resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
-
-  '@napi-rs/canvas-android-arm64@0.1.85':
-    resolution: {integrity: sha512-+br7+cFkiZHTn9en+u3wtvGMW2Fn7TJE1Kru4QsOtCgIKZ9Lg9AeFCqCdkRNz/cW/0967s2pJT/B8t900pgvFQ==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [android]
-
-  '@napi-rs/canvas-darwin-arm64@0.1.85':
-    resolution: {integrity: sha512-YPJrbThQsUDfS4z69m0xhlarbJ3BRyYx1LsVw6dotjhHywz2d7KVeFUXlJvSf+knHBV+FgZtaGEQ39MJZXn5qw==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [darwin]
-
-  '@napi-rs/canvas-darwin-x64@0.1.85':
-    resolution: {integrity: sha512-Ak/h0lf3S0Yv/AqYvTHwKoVeUsxzqC2L6ZLkcLBvsYWLOqMwdtlp6lAgz82ETtJcpsY6+g2Q9Ub25QWBQu8k0Q==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [darwin]
-
-  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.85':
-    resolution: {integrity: sha512-TzOv8ZZoNJS/M374Si4jWO/CgUhceEhAwiv1hRS3rVoGuxzcAoeUVgrT0a5FiozwGvO7WavO/ewjfZaFbZ3B9w==}
-    engines: {node: '>= 10'}
-    cpu: [arm]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm64-gnu@0.1.85':
-    resolution: {integrity: sha512-EuWX5tDk3vzL7dthAVx767LptXL6X32oiH82WU/yj4WZx0Yl7wU4PEjLBJTgNvWaWr1a8k+GB6MCkJs8NmxvrA==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-arm64-musl@0.1.85':
-    resolution: {integrity: sha512-rwqWTac7UQWBEvSaiRsfujo/N34JyP+SKnJM5rwzx1mEb3g1N6Qdatd2yAGAMFO2Ck7BM9hX0Q2+Rpag5z5Iqg==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-riscv64-gnu@0.1.85':
-    resolution: {integrity: sha512-PkpO9MhVwmG6ZLCdi3GJWlon/Qyj5qb+lB+u4RMGEfCfcaaniKBoqUoMRTb2GWWbxzZaF5eVTHTpxZF6sB8ivg==}
-    engines: {node: '>= 10'}
-    cpu: [riscv64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-x64-gnu@0.1.85':
-    resolution: {integrity: sha512-s/W7hh1n89kDIIJCAHP0PofsmfjP28QxWiEH9wEvoJAblx9u8obd6qyZf6jqh3WDoLm5Fx+upBXhA8O8GgpyDQ==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
-  '@napi-rs/canvas-linux-x64-musl@0.1.85':
-    resolution: {integrity: sha512-LEEkaaraB/bhKiVf7qXmyjrNXI/hRVKpBn1bQP6IQsypyJnB+Y2HmzLXAt6cht+4Lon8lGLacE76fU5hs9vUFw==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [linux]
-
-  '@napi-rs/canvas-win32-arm64-msvc@0.1.85':
-    resolution: {integrity: sha512-w3PVRv4suL/kErNg8Roz5f/Sow/hC7LxeOeo3jTp1iPHEnp6Gn7EvDvMPhJaI5piQqQ6i2BR/4LJHA/Mapf8vw==}
-    engines: {node: '>= 10'}
-    cpu: [arm64]
-    os: [win32]
-
-  '@napi-rs/canvas-win32-x64-msvc@0.1.85':
-    resolution: {integrity: sha512-6QqEBlJ5/rfb68ORlgNOsN+Wefx+kfMNmbzr2HxEM+M94hdBxkzvkLAfY/MxiLk3TCUBeGLFh9t0j8ZC5MKS1g==}
-    engines: {node: '>= 10'}
-    cpu: [x64]
-    os: [win32]
-
-  '@napi-rs/canvas@0.1.85':
-    resolution: {integrity: sha512-q8VnfGv4i3/vo3hMhJQxqzy8bFQ8H6MEXyiO+a66p/Ci7HD++pRAaH1tpri3jgocHH24tJNAT59r6z04LG9VpQ==}
-    engines: {node: '>= 10'}
+    resolution:
+      {
+        integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==
+      }
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -1559,7 +1492,10 @@ packages:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
 
   js-yaml@4.1.0:
-    resolution: {integrity: sha512-wpxZs9NoxZaJESJGIZTyDEaYpl0FKSA+FB9aJiyemKhMwkxQg63h4T1KJgUGHpTqPDNRcmmYLugrRjJlBtWvRA==}
+    resolution:
+      {
+        integrity: sha512-wpxZs9NoxZaJESJGIZTyDEaYpl0FKSA+FB9aJiyemKhMwkxQg63h4T1KJgUGHpTqPDNRcmmYLugrRjJlBtWvRA==
+      }
     hasBin: true
 
   jsesc@0.5.0:
@@ -1828,12 +1764,11 @@ packages:
     resolution: {integrity: sha512-whLdWMYL2TwI08hn8/ZqAbrVemu0LNaNNJZX73O6qaIdCTfXutsLhMkjdENX0qhsQ9uIimo4/aQOmXkoon2nDQ==}
 
   pathval@2.0.1:
-    resolution: {integrity: sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ==}
-    engines: {node: '>= 14.16'}
-
-  pdfjs-dist@5.4.449:
-    resolution: {integrity: sha512-CegnUaT0QwAyQMS+7o2POr4wWUNNe8VaKKlcuoRHeYo98cVnqPpwOXNSx6Trl6szH02JrRcsPgletV6GmF3LtQ==}
-    engines: {node: '>=20.16.0 || >=22.3.0'}
+    resolution:
+      {
+        integrity: sha512-//nshmD55c46FuFw26xV/xFAaB5HF9Xdap7HJBBnrKdAd6/GxDBaNA1870O79+9ueg61cZLSVc+OaFlfmObYVQ==
+      }
+    engines: { node: '>= 14.16' }
 
   pdfkit@0.15.0:
     resolution: {integrity: sha512-Z0dx0sEPKLW2kbThS1SWZ0iSHlRPoFMpP+oSjNrtwRjsfGivwE+r6emyEFwQG/fx1Ri0AGUHmDcGOSMMlLLnSg==}
@@ -1846,13 +1781,27 @@ packages:
     engines: {node: '>=8.6'}
 
   pidtree@0.6.0:
-    resolution: {integrity: sha512-eG2dWTVw5bzqGRztnHExczNxt5VGsE6OwTeCG3fdUf9KBsZzO3R5OIIIzWR+iZA0NtZ+RDVdaoE2dK1cn6jH4g==}
-    engines: {node: '>=0.10'}
+    resolution:
+      {
+        integrity: sha512-eG2dWTVw5bzqGRztnHExczNxt5VGsE6OwTeCG3fdUf9KBsZzO3R5OIIIzWR+iZA0NtZ+RDVdaoE2dK1cn6jH4g==
+      }
+    engines: { node: '>=0.10' }
+    hasBin: true
+
+  playwright-core@1.48.0:
+    resolution:
+      {
+        integrity: sha512-RBvzjM9rdpP7UUFrQzRwR8L/xR4HyC1QXMzGYTbf1vjw25/ya9NRAVnXi/0fvFopjebvyPzsmoK58xxeEOaVvA==
+      }
+    engines: { node: '>=18' }
     hasBin: true
 
   playwright-core@1.55.1:
-    resolution: {integrity: sha512-Z6Mh9mkwX+zxSlHqdr5AOcJnfp+xUWLCt9uKV18fhzA8eyxUd8NUWzAjxUh55RZKSYwDGX0cfaySdhZJGMoJ+w==}
-    engines: {node: '>=18'}
+    resolution:
+      {
+        integrity: sha512-Z6Mh9mkwX+zxSlHqdr5AOcJnfp+xUWLCt9uKV18fhzA8eyxUd8NUWzAjxUh55RZKSYwDGX0cfaySdhZJGMoJ+w==
+      }
+    engines: { node: '>=18' }
     hasBin: true
 
   playwright@1.55.1:
@@ -2455,7 +2404,7 @@ snapshots:
       globals: 13.24.0
       ignore: 5.3.2
       import-fresh: 3.3.0
-      js-yaml: 4.1.0
+      js-yaml: 4.1.1
       minimatch: 3.1.2
       strip-json-comments: 3.1.1
     transitivePeerDependencies:
@@ -2469,7 +2418,7 @@ snapshots:
       globals: 14.0.0
       ignore: 5.3.2
       import-fresh: 3.3.0
-      js-yaml: 4.1.0
+      js-yaml: 4.1.1
       minimatch: 3.1.2
       strip-json-comments: 3.1.1
     transitivePeerDependencies:
@@ -3593,7 +3542,7 @@ snapshots:
       imurmurhash: 0.1.4
       is-glob: 4.0.3
       is-path-inside: 3.0.3
-      js-yaml: 4.1.0
+      js-yaml: 4.1.1
       json-stable-stringify-without-jsonify: 1.0.1
       levn: 0.4.1
       lodash.merge: 4.6.2
@@ -3997,7 +3946,7 @@ snapshots:
 
   js-tokens@4.0.0: {}
 
-  js-yaml@4.1.0:
+  js-yaml@4.1.1:
     dependencies:
       argparse: 2.0.1
 
@@ -4267,6 +4216,8 @@ snapshots:
   pidtree@0.6.0: {}
 
   playwright-core@1.55.1: {}
+
+  playwright-core@1.56.1: {}
 
   playwright@1.55.1:
     dependencies:
