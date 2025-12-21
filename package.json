@@ -22,6 +22,7 @@
     "preinstall": "npx only-allow pnpm"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
     "@inquirer/prompts": "^7.0.0",
     "dotenv": "^16.4.5",
     "fluent-ffmpeg": "^2.1.3",
@@ -33,6 +34,7 @@
     "node-id3": "^0.2.6",
     "openai-fetch": "^3.3.1",
     "p-map": "^7.0.2",
+    "pdfjs-dist": "^5.4.449",
     "pdfkit": "^0.15.0",
     "playwright": "^1.55.1",
     "playwright-core": "^1.55.1",

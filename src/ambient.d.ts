@@ -1,7 +1,7 @@
-import '@total-typescript/ts-reset'
+// Ambient module declarations for dependencies that either:
+// - ship ESM entrypoints without matching `.d.ts` for the exact import path, or
+// - are optional at install time but required at runtime for some features.
 
-// Some ESM entrypoints in dependencies don't ship TS declarations for the exact
-// `.mjs` paths we import dynamically.
 declare module 'pdfjs-dist/legacy/build/pdf.mjs' {
   const pdfjs: any
   export default pdfjs
@@ -17,3 +17,5 @@ declare module 'pdfjs-dist/build/pdf.mjs' {
 declare module '@napi-rs/canvas' {
   export const createCanvas: any
 }
+
+

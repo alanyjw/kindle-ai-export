@@ -11,23 +11,157 @@ import {
   progressBarNewline,
   resolveOutDir,
   sanitizeDirname,
-  setupTimestampedLogger
+  setupTimestampedLogger,
+  fileExists
 } from './utils'
 
-async function main() {
-  const asin = getEnv('ASIN')
-  assert(asin, 'ASIN is required')
+function stripOcrBoilerplate(text: string): string {
+  const boilerplateLineMatchers: RegExp[] = [
+    /i['’]m sorry.*(image|uploaded|visible)/i,
+    /\bi (can|can't|cannot)\b.*\b(help|assist)\b.*\b(image|uploaded)\b/i,
+    /\bi['’]m unable to\b.*\b(help|view|analyze)\b.*\b(image|uploaded)\b/i,
+    /\bi can'?t identify\b.*\bpeople\b.*\bimages?\b/i,
+    /could you please (try again|provide|describe)/i,
+    /i (can|can't|cannot) (identify|provide information about).*people in images/i
+  ]
 
-  const outDir = await resolveOutDir(asin)
+  const lines = text.replaceAll('\r\n', '\n').split('\n')
+  const kept = lines.filter((line) => {
+    const t = line.trim()
+    if (!t) return true
+    return !boilerplateLineMatchers.some((re) => re.test(t))
+  })
+
+  return kept.join('\n').replaceAll(/\n{3,}/g, '\n\n').trim()
+}
+
+function formatPdfTextToMarkdown(body: string): string {
+  const lines = body.replaceAll('\r\n', '\n').split('\n')
+  const out: string[] = []
+
+  const pushBlank = () => {
+    if (out.length === 0) return
+    if (out[out.length - 1] !== '') out.push('')
+  }
+
+  const splitHeadingAndRest = (
+    line: string,
+    kind: 'part' | 'chapter'
+  ): { heading: string; rest: string } => {
+    const trimmed = line.trim()
+    const prefixLen =
+      kind === 'part'
+        ? (trimmed.match(/^part\b/i)?.[0].length ?? 0)
+        : (trimmed.match(/^chapter\s+\d+\b/i)?.[0].length ?? 0)
+
+    const after = trimmed.slice(prefixLen)
+    const m = after.match(/\s+[A-Z][a-z]/)
+    if (m && m.index !== undefined) {
+      const pos = prefixLen + m.index
+      return { heading: trimmed.slice(0, pos).trim(), rest: trimmed.slice(pos).trim() }
+    }
+
+    return { heading: trimmed, rest: '' }
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd()
+    if (!line.trim()) {
+      out.push('')
+      continue
+    }
+
+    const cleanedLine = stripOcrBoilerplate(line)
+    if (!cleanedLine) continue
+
+    if (/^part\b/i.test(cleanedLine)) {
+      const { heading, rest } = splitHeadingAndRest(cleanedLine, 'part')
+      pushBlank()
+      out.push(`## ${heading}`)
+      out.push('')
+      if (rest) out.push(rest)
+      continue
+    }
+
+    if (/^chapter\s+\d+\b/i.test(cleanedLine)) {
+      const { heading, rest } = splitHeadingAndRest(cleanedLine, 'chapter')
+      pushBlank()
+      out.push(`## ${heading}`)
+      out.push('')
+      if (rest) out.push(rest)
+      continue
+    }
+
+    out.push(cleanedLine)
+  }
+
+  // Normalize spacing: max 2 consecutive blank lines
+  return out.join('\n').replaceAll(/\n{3,}/g, '\n\n').trim()
+}
+
+async function main() {
+  const arg = process.argv[2]
+
+  let outDir: string
+  let pdfBasename: string | undefined
+
+  if (arg) {
+    if (/\.pdf$/i.test(arg)) {
+      const pdfPath = path.resolve(arg)
+      pdfBasename = sanitizeDirname(
+        path.basename(pdfPath, path.extname(pdfPath))
+      )
+      outDir = path.join('out', pdfBasename)
+    } else {
+      outDir = path.resolve(arg)
+    }
+  } else {
+    const asin = getEnv('ASIN')
+    assert(asin, 'ASIN is required')
+    outDir = await resolveOutDir(asin)
+  }
+
   await setupTimestampedLogger(outDir)
 
   const content = JSON.parse(
     await fs.readFile(path.join(outDir, 'content.json'), 'utf8')
   ) as ContentChunk[]
-  const metadata = JSON.parse(
-    await fs.readFile(path.join(outDir, 'metadata.json'), 'utf8')
-  ) as BookMetadata
   assert(content.length, 'no book content found')
+
+  const metadataPath = path.join(outDir, 'metadata.json')
+  const hasMetadata = await fileExists(metadataPath)
+
+  // PDF / content-only mode (no metadata.json)
+  if (!hasMetadata) {
+    const title = pdfBasename || path.basename(outDir)
+    const safeTitle = sanitizeDirname(title)
+
+    const sorted = [...content].sort(
+      (a, b) => a.page - b.page || a.index - b.index
+    )
+
+    const bar = createProgressBar(sorted.length)
+
+    const body = sorted
+      .map((chunk) => {
+        bar.tick(1)
+        return stripOcrBoilerplate(chunk.text)
+      })
+      .join('\n\n')
+
+    progressBarNewline()
+
+    const formattedBody = formatPdfTextToMarkdown(body)
+    const output = `# ${title}\n\n${formattedBody}\n`
+    const markdownPath = path.join(outDir, `${safeTitle}.md`)
+    await fs.writeFile(markdownPath, output)
+    console.log(`Export complete. Wrote markdown to: ${markdownPath}`)
+    console.log(`Pages processed: ${sorted.length}`)
+    return
+  }
+
+  // Kindle mode (existing)
+  const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as BookMetadata
   assert(metadata.meta, 'invalid book metadata: missing meta')
   assert(metadata.toc?.length, 'invalid book metadata: missing toc')
 
@@ -94,7 +228,7 @@ ${text}`
 
   progressBarNewline()
 
-  const safeTitle = sanitizeDirname(title || asin)
+  const safeTitle = sanitizeDirname(title || pdfBasename || path.basename(outDir))
   const markdownPath = path.join(outDir, `${safeTitle}.md`)
 
   await fs.writeFile(markdownPath, output)

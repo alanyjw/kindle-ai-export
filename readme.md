@@ -207,6 +207,16 @@ npx tsx src/transcribe-book-content.ts
 - The result is stored as JSON to `out/${asin}/content.json`.
 - Example: [examples/B0819W19WD/content.json](./examples/B0819W19WD/content.json)
 
+You can also transcribe a local PDF (ASIN not required):
+
+```sh
+npx tsx src/transcribe-book-content.ts /absolute/path/to/book.pdf
+```
+
+- This writes `content.json` to `out/<pdf-basename>/content.json`.
+- It will prefer embedded PDF text extraction and only fall back to OCR when a page has little/no text.
+- Note: PDF mode currently does not generate `metadata.json`, so the existing export scripts that depend on metadata may not work yet.
+
 ### (Optional) Export Book as PDF
 
 ```sh
@@ -239,6 +249,16 @@ npx tsx src/export-book-markdown.ts
 - _(This should run instantly)_
 - The result is stored to `out/${asin}/book.md`.
 - Example: [examples/B0819W19WD/book-preview.md](./examples/B0819W19WD/book-preview.md)
+
+You can also export markdown from a PDF transcription output:
+
+```sh
+# If you originally ran: npx tsx src/transcribe-book-content.ts /path/to/book.pdf
+npx tsx src/export-book-markdown.ts /path/to/book.pdf
+
+# Or pass the output directory directly
+npx tsx src/export-book-markdown.ts out/<pdf-basename>
+```
 
 ### (Optional) Export Book as AI-Narrated Audiobook 🔥
 
