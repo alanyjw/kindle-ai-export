@@ -65,11 +65,18 @@ export async function resolveOutDir(asin: string): Promise<string> {
     // Look for directories that start with ASIN (supports both old and new formats)
     // Old format: "ASIN"
     // New format: "ASIN-Book Title"
-    const match = entries.find(
-      (e) =>
-        e.isDirectory() && e.name.toLowerCase().startsWith(asin.toLowerCase())
-    )
-    if (match) return path.join(baseOutDir, match.name)
+    const matches = entries
+      .filter(
+        (e) =>
+          e.isDirectory() &&
+          e.name.toLowerCase().startsWith(asin.toLowerCase())
+      )
+      // Prefer titled directories (longer names) when both exist
+      .sort((a, b) => b.name.length - a.name.length)
+
+    if (matches.length > 0) {
+      return path.join(baseOutDir, matches[0]!.name)
+    }
   } catch {}
 
   return path.join(baseOutDir, asin)
