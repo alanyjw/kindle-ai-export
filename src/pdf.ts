@@ -45,7 +45,9 @@ export async function extractPdfPageText(
   const doc = await loadPdfDocument(pdfPath)
   const page = await doc.getPage(pageNumber)
   const textContent = await page.getTextContent()
-  const items: any[] = Array.isArray(textContent?.items) ? textContent.items : []
+  const items: any[] = Array.isArray(textContent?.items)
+    ? textContent.items
+    : []
 
   // Keep it simple: PDF text extraction often produces broken line breaks; joining
   // with spaces is usually the least-worst default.
@@ -66,7 +68,10 @@ export async function renderPdfPageToPngBuffer(
 
   // A moderate scale tends to OCR well without being too expensive.
   const viewport = page.getViewport({ scale: 2 })
-  const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height))
+  const canvas = createCanvas(
+    Math.ceil(viewport.width),
+    Math.ceil(viewport.height)
+  )
   const ctx = canvas.getContext('2d')
 
   const renderTask = page.render({
@@ -82,5 +87,3 @@ export async function closePdfRenderer(pdfPath: string): Promise<void> {
   // Kept for API compatibility with callers; Node rendering doesn't hold external resources.
   void pdfPath
 }
-
-

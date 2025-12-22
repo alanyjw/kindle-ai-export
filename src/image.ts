@@ -175,5 +175,3 @@ export async function isBlankPageFromPng(
 
   return { isBlank: basic && stddevOk, analysis }
 }
-
-

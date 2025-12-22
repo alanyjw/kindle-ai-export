@@ -50,5 +50,3 @@ describe('isBlankPageFromPng', () => {
     expect(res.analysis.darkRatio).toBeGreaterThan(0.002)
   })
 })
-
-

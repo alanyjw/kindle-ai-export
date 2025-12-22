@@ -17,5 +17,3 @@ declare module 'pdfjs-dist/build/pdf.mjs' {
 declare module '@napi-rs/canvas' {
   export const createCanvas: any
 }
-
-

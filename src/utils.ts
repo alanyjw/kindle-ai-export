@@ -68,8 +68,7 @@ export async function resolveOutDir(asin: string): Promise<string> {
     const matches = entries
       .filter(
         (e) =>
-          e.isDirectory() &&
-          e.name.toLowerCase().startsWith(asin.toLowerCase())
+          e.isDirectory() && e.name.toLowerCase().startsWith(asin.toLowerCase())
       )
       // Prefer titled directories (longer names) when both exist
       .sort((a, b) => b.name.length - a.name.length)

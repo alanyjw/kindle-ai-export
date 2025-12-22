@@ -32,7 +32,10 @@ function stripOcrBoilerplate(text: string): string {
     return !boilerplateLineMatchers.some((re) => re.test(t))
   })
 
-  return kept.join('\n').replaceAll(/\n{3,}/g, '\n\n').trim()
+  return kept
+    .join('\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 function formatPdfTextToMarkdown(body: string): string {
@@ -58,7 +61,10 @@ function formatPdfTextToMarkdown(body: string): string {
     const m = after.match(/\s+[A-Z][a-z]/)
     if (m && m.index !== undefined) {
       const pos = prefixLen + m.index
-      return { heading: trimmed.slice(0, pos).trim(), rest: trimmed.slice(pos).trim() }
+      return {
+        heading: trimmed.slice(0, pos).trim(),
+        rest: trimmed.slice(pos).trim()
+      }
     }
 
     return { heading: trimmed, rest: '' }
@@ -96,7 +102,10 @@ function formatPdfTextToMarkdown(body: string): string {
   }
 
   // Normalize spacing: max 2 consecutive blank lines
-  return out.join('\n').replaceAll(/\n{3,}/g, '\n\n').trim()
+  return out
+    .join('\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 async function main() {
@@ -161,7 +170,9 @@ async function main() {
   }
 
   // Kindle mode (existing)
-  const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as BookMetadata
+  const metadata = JSON.parse(
+    await fs.readFile(metadataPath, 'utf8')
+  ) as BookMetadata
   assert(metadata.meta, 'invalid book metadata: missing meta')
   assert(metadata.toc?.length, 'invalid book metadata: missing toc')
 
@@ -228,7 +239,9 @@ ${text}`
 
   progressBarNewline()
 
-  const safeTitle = sanitizeDirname(title || pdfBasename || path.basename(outDir))
+  const safeTitle = sanitizeDirname(
+    title || pdfBasename || path.basename(outDir)
+  )
   const markdownPath = path.join(outDir, `${safeTitle}.md`)
 
   await fs.writeFile(markdownPath, output)

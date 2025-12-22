@@ -17,6 +17,7 @@
   "scripts": {
     "test": "run-s test:*",
     "test:format": "prettier --check \"**/*.{js,ts,tsx}\"",
+    "test:format:fix": "prettier --write \"**/*.{js,ts,tsx}\"",
     "test:lint": "eslint .",
     "test:typecheck": "tsc --noEmit",
     "test:unit": "vitest run",

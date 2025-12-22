@@ -23,7 +23,10 @@ function stripOcrBoilerplate(text: string): string {
     return !boilerplateLineMatchers.some((re) => re.test(t))
   })
 
-  return kept.join('\n').replaceAll(/\n{3,}/g, '\n\n').trim()
+  return kept
+    .join('\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 function formatPdfTextToMarkdown(body: string): string {
@@ -89,22 +92,42 @@ function formatPdfTextToMarkdown(body: string): string {
     out.push(cleanedLine)
   }
 
-  return out.join('\n').replaceAll(/\n{3,}/g, '\n\n').trim()
+  return out
+    .join('\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 async function main() {
   const outDirArg = process.argv[2]
-  const outDir = outDirArg ? path.resolve(outDirArg) : path.resolve('out/Peopleware')
+  const outDir = outDirArg
+    ? path.resolve(outDirArg)
+    : path.resolve('out/Peopleware')
   const title = sanitizeDirname(path.basename(outDir))
 
   const contentPath = path.join(outDir, 'content.json')
   const mdPath = path.join(outDir, `${title}.md`)
-  assert(await fs.stat(contentPath).then(() => true).catch(() => false), `missing ${contentPath}`)
-  assert(await fs.stat(mdPath).then(() => true).catch(() => false), `missing ${mdPath}`)
+  assert(
+    await fs
+      .stat(contentPath)
+      .then(() => true)
+      .catch(() => false),
+    `missing ${contentPath}`
+  )
+  assert(
+    await fs
+      .stat(mdPath)
+      .then(() => true)
+      .catch(() => false),
+    `missing ${mdPath}`
+  )
 
   const raw = await fs.readFile(contentPath, 'utf8')
   const content = JSON.parse(raw) as ContentChunk[]
-  assert(Array.isArray(content) && content.length > 0, 'invalid or empty content.json')
+  assert(
+    Array.isArray(content) && content.length > 0,
+    'invalid or empty content.json'
+  )
 
   const cleaned: ContentChunk[] = content.map((c) => ({
     ...c,
@@ -114,8 +137,13 @@ async function main() {
   const cleanedPath = path.join(outDir, 'content.cleaned.json')
   await fs.writeFile(cleanedPath, JSON.stringify(cleaned, null, 2))
 
-  const sorted = [...cleaned].sort((a, b) => a.page - b.page || a.index - b.index)
-  const body = sorted.map((c) => c.text).filter(Boolean).join('\n\n')
+  const sorted = [...cleaned].sort(
+    (a, b) => a.page - b.page || a.index - b.index
+  )
+  const body = sorted
+    .map((c) => c.text)
+    .filter(Boolean)
+    .join('\n\n')
   const formattedBody = formatPdfTextToMarkdown(body)
   const cleanedMdPath = path.join(outDir, `${title}.cleaned.md`)
   const output = `# ${title}\n\n${formattedBody}\n`
@@ -130,5 +158,3 @@ async function main() {
 }
 
 await main()
-
-

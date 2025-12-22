@@ -9,7 +9,12 @@ import pMap from 'p-map'
 
 import type { ContentChunk } from './types'
 import { isBlankPageFromPng } from './image'
-import { closePdfRenderer, extractPdfPageText, getPdfPageCount, renderPdfPageToPngBuffer } from './pdf'
+import {
+  closePdfRenderer,
+  extractPdfPageText,
+  getPdfPageCount,
+  renderPdfPageToPngBuffer
+} from './pdf'
 import {
   assert,
   createProgressBar,
@@ -92,7 +97,10 @@ function stripOcrBoilerplate(text: string): string {
     return !boilerplateLineMatchers.some((re) => re.test(t))
   })
 
-  return kept.join('\n').replaceAll(/\n{3,}/g, '\n\n').trim()
+  return kept
+    .join('\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 function looksLikeOcrRefusal(text: string): boolean {
@@ -160,7 +168,9 @@ function tryParseOcrJson(raw: string): OcrParseResult {
   // Strip markdown code fences if present (common with GPT wrappers)
   let cleaned = raw.trim()
   if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '')
+    cleaned = cleaned
+      .replace(/^```(?:json)?\s*\n?/, '')
+      .replace(/\n?```\s*$/, '')
   }
 
   try {
@@ -181,9 +191,11 @@ function tryParseOcrJson(raw: string): OcrParseResult {
             if (v !== null && typeof v === 'object') {
               const vis = v as Record<string, unknown>
               const type = typeof vis.type === 'string' ? vis.type : 'visual'
-              const desc = typeof vis.description === 'string' ? vis.description : ''
+              const desc =
+                typeof vis.description === 'string' ? vis.description : ''
               const title = typeof vis.title === 'string' ? vis.title : ''
-              const extractedText = typeof vis.extracted_text === 'string' ? vis.extracted_text : ''
+              const extractedText =
+                typeof vis.extracted_text === 'string' ? vis.extracted_text : ''
 
               let line = `[${type.toUpperCase()}]`
               if (title) line += ` ${title}:`
@@ -207,7 +219,13 @@ function tryParseOcrJson(raw: string): OcrParseResult {
     // Fall through to plain-text path
   }
 
-  return { text: raw, parsed: false, hasVisuals: false, isBlank: false, visualsDescription: '' }
+  return {
+    text: raw,
+    parsed: false,
+    hasVisuals: false,
+    isBlank: false,
+    visualsDescription: ''
+  }
 }
 
 async function ocrImageToText(
@@ -277,11 +295,14 @@ async function ocrImageToText(
         }
       } else {
         // Plain-text fallback: apply existing normalization
-        console.warn('JSON parse failed; falling back to plain-text normalization', {
-          index: opts.index,
-          page: opts.page,
-          rawPreview: rawText.slice(0, 200)
-        })
+        console.warn(
+          'JSON parse failed; falling back to plain-text normalization',
+          {
+            index: opts.index,
+            page: opts.page,
+            rawPreview: rawText.slice(0, 200)
+          }
+        )
         const normalized = rawText
           .replace(/^\s*\d+\s*$\n+/m, '')
           .replaceAll(/^\s*/gm, '')
@@ -294,12 +315,15 @@ async function ocrImageToText(
         retries++
         if (retries < maxRetries) {
           const delay = calculateBackoffDelay(retries)
-          console.warn(`Empty response with no visuals, retrying in ${delay}ms...`, {
-            index: opts.index,
-            page: opts.page,
-            retries,
-            screenshot: opts.screenshot
-          })
+          console.warn(
+            `Empty response with no visuals, retrying in ${delay}ms...`,
+            {
+              index: opts.index,
+              page: opts.page,
+              retries,
+              screenshot: opts.screenshot
+            }
+          )
           await sleep(delay)
           continue
         }
@@ -309,7 +333,9 @@ async function ocrImageToText(
       if (looksLikeOcrRefusal(text)) {
         retries++
         if (retries >= maxRetries) {
-          throw new Error(`Model refused too many times (${retries} times): ${text}`)
+          throw new Error(
+            `Model refused too many times (${retries} times): ${text}`
+          )
         }
 
         const delay = calculateBackoffDelay(retries)
@@ -441,14 +467,20 @@ async function main() {
 
     const pageNumbers = Array.from({ length: numPages }, (_, i) => i + 1)
     const keyForPage = (p: number) => `pdf:${pdfPath}#page=${p}`
-    const pagesToProcess = pageNumbers.filter((p) => !processedScreenshots.has(keyForPage(p)))
+    const pagesToProcess = pageNumbers.filter(
+      (p) => !processedScreenshots.has(keyForPage(p))
+    )
 
     if (pagesToProcess.length === 0) {
-      console.warn('✅ Nothing to transcribe; content.json is already up to date.')
+      console.warn(
+        '✅ Nothing to transcribe; content.json is already up to date.'
+      )
       await fs.writeFile(
         contentPath,
         JSON.stringify(
-          [...existingContent].sort((a, b) => a.index - b.index || a.page - b.page),
+          [...existingContent].sort(
+            (a, b) => a.index - b.index || a.page - b.page
+          ),
           null,
           2
         )
@@ -491,7 +523,9 @@ async function main() {
         }
       })
 
-    const ocrPages = extracted.filter((x) => !goodEnough(x.text)).map((x) => x.page)
+    const ocrPages = extracted
+      .filter((x) => !goodEnough(x.text))
+      .map((x) => x.page)
 
     const ocrChunks: ContentChunk[] = (
       await pMap(
@@ -603,7 +637,10 @@ async function main() {
 
             return result
           } catch (err: any) {
-            console.error(`error processing image ${index} (${screenshot})`, err)
+            console.error(
+              `error processing image ${index} (${screenshot})`,
+              err
+            )
           }
         },
         { concurrency: transcribeConcurrency }
