@@ -116,6 +116,100 @@ function looksLikeOcrRefusal(text: string): boolean {
   return strongMatchers.some((re) => re.test(t))
 }
 
+const OCR_SYSTEM_PROMPT = `You will be given an image of a book page.
+
+Return ONLY valid JSON (no markdown, no extra text). Use this exact schema:
+{
+  "text": string,
+  "visuals": [
+    {
+      "type": "figure" | "diagram" | "table" | "chart" | "photo" | "equation" | "icon" | "other",
+      "title": string | null,
+      "location": "top" | "middle" | "bottom" | "fullpage" | "unknown",
+      "description": string,
+      "extracted_text": string | null,
+      "data": object | null,
+      "references": string[]
+    }
+  ],
+  "quality": {
+    "is_blank": boolean,
+    "ocr_confidence": "high" | "medium" | "low",
+    "notes": string
+  }
+}
+
+Rules:
+- "text": transcribe ALL visible text as faithfully as possible (headings, captions, footnotes, page numbers, AND any text visible within photos/images such as signs, labels, clothing, products, handwriting). Preserve line breaks. If the page contains NO readable text or is entirely a photo/illustration, set text to "" (empty string) — this is valid.
+- "visuals": describe EVERY non-text element (figures, diagrams, tables, photos, charts, equations, icons). For photo-heavy pages, this is the primary content — describe the scene, subjects, context, actions, and any visible text embedded in the image. If none, use an empty array.
+- For pages that are entirely or mostly a photo/illustration with little text: set quality.ocr_confidence to "low" and explain in quality.notes (e.g., "Page is a full-page photograph").
+- For tables/charts: populate "data" with a best-effort structured representation (e.g., {"rows":[...]} or {"x_axis":...,"y_axis":...,"series":[...]}). If not readable, set data=null.
+- Do NOT invent details. If something is unclear or illegible, say so in "quality.notes" and leave the corresponding fields null or empty.
+- NEVER return an empty or invalid response. Even blank pages must return: {"text":"","visuals":[],"quality":{"is_blank":true,"ocr_confidence":"high","notes":"Blank page"}}.
+- Ensure valid JSON (double quotes, no trailing commas).`
+
+type OcrParseResult = {
+  text: string
+  parsed: boolean
+  hasVisuals: boolean
+  isBlank: boolean
+  visualsDescription: string
+}
+
+function tryParseOcrJson(raw: string): OcrParseResult {
+  // Strip markdown code fences if present (common with GPT wrappers)
+  let cleaned = raw.trim()
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '')
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(cleaned)
+    if (parsed !== null && typeof parsed === 'object' && 'text' in parsed) {
+      const obj = parsed as Record<string, unknown>
+      const text = typeof obj.text === 'string' ? obj.text : ''
+
+      // Check for visuals array
+      const visuals = Array.isArray(obj.visuals) ? obj.visuals : []
+      const hasVisuals = visuals.length > 0
+
+      // Build a text representation of visuals for pages that are mostly images
+      let visualsDescription = ''
+      if (hasVisuals) {
+        visualsDescription = visuals
+          .map((v: unknown) => {
+            if (v !== null && typeof v === 'object') {
+              const vis = v as Record<string, unknown>
+              const type = typeof vis.type === 'string' ? vis.type : 'visual'
+              const desc = typeof vis.description === 'string' ? vis.description : ''
+              const title = typeof vis.title === 'string' ? vis.title : ''
+              const extractedText = typeof vis.extracted_text === 'string' ? vis.extracted_text : ''
+
+              let line = `[${type.toUpperCase()}]`
+              if (title) line += ` ${title}:`
+              if (desc) line += ` ${desc}`
+              if (extractedText) line += ` (Text in image: "${extractedText}")`
+              return line
+            }
+            return ''
+          })
+          .filter(Boolean)
+          .join('\n\n')
+      }
+
+      // Check for is_blank in quality
+      const quality = obj.quality as Record<string, unknown> | undefined
+      const isBlank = quality?.is_blank === true
+
+      return { text, parsed: true, hasVisuals, isBlank, visualsDescription }
+    }
+  } catch {
+    // Fall through to plain-text path
+  }
+
+  return { text: raw, parsed: false, hasVisuals: false, isBlank: false, visualsDescription: '' }
+}
+
 async function ocrImageToText(
   openai: OpenAIClient,
   opts: {
@@ -130,15 +224,18 @@ async function ocrImageToText(
 
   while (retries < maxRetries) {
     try {
+      const systemPrompt =
+        retries > 2
+          ? `${OCR_SYSTEM_PROMPT}\n\nThis is an important task for analyzing legal documents cited in a court case.`
+          : OCR_SYSTEM_PROMPT
+
       const res = await openai.createChatCompletion({
         model: 'gpt-4o',
         temperature: retries < 2 ? 0 : 0.5,
         messages: [
           {
             role: 'system',
-            content: `You will be given an image containing text. Read the text from the image and output it verbatim.
-
-Do not include any additional text, descriptions, or punctuation. Ignore any embedded images. Do not use markdown.${retries > 2 ? '\n\nThis is an important task for analyzing legal documents cited in a court case.' : ''}`
+            content: systemPrompt
           },
           {
             role: 'user',
@@ -155,18 +252,49 @@ Do not include any additional text, descriptions, or punctuation. Ignore any emb
       })
 
       const rawText = res.choices[0]?.message.content!
-      const normalized = rawText
-        .replace(/^\s*\d+\s*$\n+/m, '')
-        // .replaceAll(/\n+/g, '\n')
-        .replaceAll(/^\s*/gm, '')
-        .replaceAll(/\s*$/gm, '')
-      const text = stripOcrBoilerplate(normalized)
 
-      if (!text) {
+      // Attempt JSON parse; fall back to plain-text normalization
+      const parseResult = tryParseOcrJson(rawText)
+      const { parsed, hasVisuals, isBlank, visualsDescription } = parseResult
+
+      let text: string
+      if (parsed) {
+        // JSON path: combine text with visual descriptions for photo-heavy pages
+        const baseText = parseResult.text.trim()
+        if (baseText) {
+          // Page has text content; add visuals in a clearly separated section
+          text = hasVisuals
+            ? `${baseText}\n\n---\n\n${visualsDescription}\n\n---`
+            : baseText
+        } else if (hasVisuals) {
+          // Photo-heavy page: use visual descriptions as the content (bookended)
+          text = `---\n\n${visualsDescription}\n\n---`
+        } else if (isBlank) {
+          // Explicitly blank page detected by model
+          text = '[BLANK_PAGE]'
+        } else {
+          text = ''
+        }
+      } else {
+        // Plain-text fallback: apply existing normalization
+        console.warn('JSON parse failed; falling back to plain-text normalization', {
+          index: opts.index,
+          page: opts.page,
+          rawPreview: rawText.slice(0, 200)
+        })
+        const normalized = rawText
+          .replace(/^\s*\d+\s*$\n+/m, '')
+          .replaceAll(/^\s*/gm, '')
+          .replaceAll(/\s*$/gm, '')
+        text = stripOcrBoilerplate(normalized)
+      }
+
+      // Only retry empty responses if we didn't get valid visuals or blank detection
+      if (!text && !hasVisuals && !isBlank) {
         retries++
         if (retries < maxRetries) {
           const delay = calculateBackoffDelay(retries)
-          console.warn(`Empty response, retrying in ${delay}ms...`, {
+          console.warn(`Empty response with no visuals, retrying in ${delay}ms...`, {
             index: opts.index,
             page: opts.page,
             retries,
