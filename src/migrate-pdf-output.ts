@@ -35,7 +35,7 @@ function formatPdfTextToMarkdown(body: string): string {
 
   const pushBlank = () => {
     if (out.length === 0) return
-    if (out[out.length - 1] !== '') out.push('')
+    if (out.at(-1) !== '') out.push('')
   }
 
   const splitHeadingAndRest = (
