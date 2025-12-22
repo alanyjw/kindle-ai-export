@@ -8,6 +8,7 @@ import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
 import type { ContentChunk } from './types'
+import { isBlankPageFromPng } from './image'
 import { closePdfRenderer, extractPdfPageText, getPdfPageCount, renderPdfPageToPngBuffer } from './pdf'
 import {
   assert,
@@ -18,6 +19,20 @@ import {
   sanitizeDirname,
   setupTimestampedLogger
 } from './utils'
+
+function parseNumberEnv(name: string, fallback: number): number {
+  const raw = getEnv(name)
+  if (!raw) return fallback
+  const n = Number.parseFloat(raw)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function parseIntEnv(name: string, fallback: number): number {
+  const raw = getEnv(name)
+  if (!raw) return fallback
+  const n = Number.parseInt(raw, 10)
+  return Number.isFinite(n) ? n : fallback
+}
 
 // Utility function for exponential backoff with jitter
 function sleep(ms: number): Promise<void> {
@@ -276,14 +291,19 @@ async function main() {
 
   const openai = new OpenAIClient()
 
-  const transcribeConcurrency = Number.parseInt(
-    getEnv('TRANSCRIBE_CONCURRENCY') || '16',
-    10
-  )
-  const ocrConcurrency = Number.parseInt(
-    getEnv('TRANSCRIBE_OCR_CONCURRENCY') || '1',
-    10
-  )
+  const transcribeConcurrency = parseIntEnv('TRANSCRIBE_CONCURRENCY', 16)
+  const ocrConcurrency = parseIntEnv('TRANSCRIBE_OCR_CONCURRENCY', 1)
+
+  const blankMarker = getEnv('TRANSCRIBE_BLANK_MARKER') || '[BLANK_PAGE]'
+  const blankOpts = {
+    whiteRatioThreshold: parseNumberEnv('TRANSCRIBE_BLANK_WHITE_RATIO', 0.95),
+    whiteLuma: parseNumberEnv('TRANSCRIBE_BLANK_WHITE_LUMA', 245),
+    blackLuma: parseNumberEnv('TRANSCRIBE_BLANK_BLACK_LUMA', 30),
+    darkRatioMax: parseNumberEnv('TRANSCRIBE_BLANK_DARK_RATIO_MAX', 0.002),
+    cropPct: parseNumberEnv('TRANSCRIBE_BLANK_CROP_PCT', 0.02),
+    sampleStep: parseIntEnv('TRANSCRIBE_BLANK_SAMPLE_STEP', 4),
+    maxDimension: 512
+  } as const
 
   let content: ContentChunk[] = []
 
@@ -352,6 +372,20 @@ async function main() {
           const screenshot = keyForPage(p)
           try {
             const png = await renderPdfPageToPngBuffer(pdfPath, p)
+
+            const blank = await isBlankPageFromPng(png, blankOpts)
+            if (blank.isBlank) {
+              const result: ContentChunk = {
+                index: p - 1,
+                page: p,
+                text: blankMarker,
+                screenshot
+              }
+              console.log({ ...result, blank: blank.analysis })
+              bar.tick(1)
+              return result
+            }
+
             const imageBase64Url = `data:image/png;base64,${png.toString('base64')}`
             const text = await ocrImageToText(openai, {
               imageBase64Url,
@@ -390,7 +424,6 @@ async function main() {
         screenshotsToProcess,
         async (screenshot) => {
           const screenshotBuffer = await fs.readFile(screenshot)
-          const imageBase64Url = `data:image/png;base64,${screenshotBuffer.toString('base64')}`
           // Filenames are like "0000-0001.png" where the first is index and the second is page
           // Robustly capture both numbers ignoring any leading zeros
           const metadataMatch = screenshot.match(
@@ -408,6 +441,20 @@ async function main() {
           )
 
           try {
+            const blank = await isBlankPageFromPng(screenshotBuffer, blankOpts)
+            if (blank.isBlank) {
+              const result: ContentChunk = {
+                index,
+                page,
+                text: blankMarker,
+                screenshot
+              }
+              console.log({ ...result, blank: blank.analysis })
+              bar.tick(1)
+              return result
+            }
+
+            const imageBase64Url = `data:image/png;base64,${screenshotBuffer.toString('base64')}`
             const text = await ocrImageToText(openai, {
               imageBase64Url,
               index,
