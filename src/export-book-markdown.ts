@@ -7,12 +7,12 @@ import type { BookMetadata, ContentChunk } from './types'
 import {
   assert,
   createProgressBar,
+  fileExists,
   getEnv,
   progressBarNewline,
   resolveOutDir,
   sanitizeDirname,
-  setupTimestampedLogger,
-  fileExists
+  setupTimestampedLogger
 } from './utils'
 
 function stripOcrBoilerplate(text: string): string {
@@ -44,7 +44,7 @@ function formatPdfTextToMarkdown(body: string): string {
 
   const pushBlank = () => {
     if (out.length === 0) return
-    if (out[out.length - 1] !== '') out.push('')
+    if (out.at(-1) !== '') out.push('')
   }
 
   const splitHeadingAndRest = (
