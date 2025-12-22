@@ -39,8 +39,8 @@
     "p-map": "^7.0.2",
     "pdfjs-dist": "^5.4.449",
     "pdfkit": "^0.15.0",
-    "playwright": "^1.55.1",
-    "playwright-core": "^1.55.1",
+    "playwright": "^1.57.0",
+    "playwright-core": "^1.57.0",
     "unrealspeech-api": "^1.0.2"
   },
   "devDependencies": {
