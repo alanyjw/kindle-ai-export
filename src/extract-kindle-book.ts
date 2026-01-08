@@ -219,13 +219,22 @@ async function main() {
 
       // Disable passkey/WebAuthn popups
       '--disable-web-security',
-      '--disable-features=VizDisplayCompositor',
       '--disable-features=WebAuthentication',
       '--disable-component-extensions-with-background-pages',
-      '--no-first-run'
+      '--no-first-run',
+
+      // Performance optimizations
+      '--enable-features=VaapiVideoDecoder,VaapiVideoEncoder',
+      '--enable-gpu-rasterization',
+      '--enable-zero-copy',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding'
     ],
     ignoreDefaultArgs: ['--enable-automation'],
-    deviceScaleFactor: 2,
+    deviceScaleFactor: 1.5,
     viewport: { width: 1280, height: 720 }
   })
   const page = await context.newPage()
@@ -263,8 +272,8 @@ async function main() {
   })
 
   await Promise.any([
-    page.goto(bookReaderUrl, { timeout: 30_000 }),
-    page.waitForURL('**/ap/signin', { timeout: 30_000 })
+    page.goto(bookReaderUrl, { timeout: 60_000 }),
+    page.waitForURL('**/ap/signin', { timeout: 60_000 })
   ])
 
   if (/\/ap\/signin/g.test(new URL(page.url()).pathname)) {
@@ -292,7 +301,7 @@ async function main() {
     }
 
     if (!page.url().includes(bookReaderUrl)) {
-      await page.goto(bookReaderUrl)
+      await page.goto(bookReaderUrl, { timeout: 90_000 })
 
       // page.waitForURL('**/kindle-library', { timeout: 30_000 })
       // await page.locator(`#title-${asin}`).click()
