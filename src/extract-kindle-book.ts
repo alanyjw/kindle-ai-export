@@ -217,9 +217,9 @@ async function main() {
       '--password-store=basic',
       '--use-mock-keychain',
 
-      // Disable passkey/WebAuthn popups
+      // Disable passkey/WebAuthn popups and password manager features
       '--disable-web-security',
-      '--disable-features=WebAuthentication',
+      '--disable-features=PasswordManager,PasswordManagerOnboarding,WebAuthentication',
       '--disable-component-extensions-with-background-pages',
       '--no-first-run',
 
@@ -237,6 +237,14 @@ async function main() {
     deviceScaleFactor: 1.5,
     viewport: { width: 1280, height: 720 }
   })
+
+  // Block credential API at JavaScript level to prevent password prompts
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'credentials', {
+      get: () => undefined
+    })
+  })
+
   const page = await context.newPage()
 
   let info: BookInfo | undefined
@@ -283,6 +291,9 @@ async function main() {
     await page.locator('input[type="password"]').fill(amazonPassword)
     // await page.locator('input[type="checkbox"]').click()
     await page.locator('input[type="submit"]').click()
+
+    // Wait for page navigation to complete and suppress password save prompt
+    await delay(3000)
 
     if (!/\/kindle-library/g.test(new URL(page.url()).pathname)) {
       const code = await input({
