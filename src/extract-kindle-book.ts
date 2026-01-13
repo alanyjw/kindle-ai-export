@@ -295,33 +295,12 @@ async function main() {
     // await page.locator('input[type="checkbox"]').click()
     await page.locator('input[type="submit"]').click()
 
-    // Wait for page navigation to complete and suppress password save prompt
-    await delay(3000)
-
-    // Try to dismiss Google Password Manager prompt if it appears
-    try {
-      // Try multiple selectors that might match the "Never" or close button
-      const dismissButtons = [
-        'button:has-text("Never")',
-        'button[aria-label*="Never"]',
-        'button[aria-label*="Close"]',
-        '[aria-label*="Close"]',
-        'button:has-text("No thanks")'
-      ]
-
-      for (const selector of dismissButtons) {
-        const button = page.locator(selector).first()
-        if (await button.isVisible({ timeout: 500 }).catch(() => false)) {
-          await button.click()
-          await delay(500)
-          break
-        }
-      }
-    } catch {
-      // Ignore errors - prompt may not appear or may already be dismissed
-    }
-
     if (!/\/kindle-library/g.test(new URL(page.url()).pathname)) {
+      // Note: You may need to manually dismiss password/passkey prompts
+      console.log(
+        'If you see password save or passkey prompts, please dismiss them manually'
+      )
+
       const code = await input({
         message: '2-factor auth code?'
       })
