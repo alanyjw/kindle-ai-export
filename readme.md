@@ -176,7 +176,7 @@ You can find your book's [ASIN](https://en.wikipedia.org/wiki/Amazon_Standard_Id
 ### Extract Kindle Book
 
 ```sh
-npx tsx src/extract-kindle-book.ts
+pnpm tsx src/extract-kindle-book.ts
 ```
 
 - _(This takes a few minutes to run)_
@@ -198,7 +198,7 @@ npx tsx src/extract-kindle-book.ts
 ### Transcribe Book Content
 
 ```sh
-npx tsx src/transcribe-book-content.ts
+pnpm tsx src/transcribe-book-content.ts
 ```
 
 - _(This takes a few minutes to run)_
@@ -210,7 +210,7 @@ npx tsx src/transcribe-book-content.ts
 You can also transcribe a local PDF (ASIN not required):
 
 ```sh
-npx tsx src/transcribe-book-content.ts /absolute/path/to/book.pdf
+pnpm tsx src/transcribe-book-content.ts /absolute/path/to/book.pdf
 ```
 
 - This writes `content.json` to `out/<pdf-basename>/content.json`.
@@ -220,7 +220,7 @@ npx tsx src/transcribe-book-content.ts /absolute/path/to/book.pdf
 ### (Optional) Export Book as PDF
 
 ```sh
-npx tsx src/export-book-pdf.ts
+pnpm tsx src/export-book-pdf.ts
 ```
 
 - _(This should run instantly)_
@@ -243,7 +243,7 @@ _([ebook-convert docs](https://manual.calibre-ebook.com/generated/en/ebook-conve
 ### (Optional) Export Book as Markdown
 
 ```sh
-npx tsx src/export-book-markdown.ts
+pnpm tsx src/export-book-markdown.ts
 ```
 
 - _(This should run instantly)_
@@ -253,17 +253,17 @@ npx tsx src/export-book-markdown.ts
 You can also export markdown from a PDF transcription output:
 
 ```sh
-# If you originally ran: npx tsx src/transcribe-book-content.ts /path/to/book.pdf
-npx tsx src/export-book-markdown.ts /path/to/book.pdf
+# If you originally ran: pnpm tsx src/transcribe-book-content.ts /path/to/book.pdf
+pnpm tsx src/export-book-markdown.ts /path/to/book.pdf
 
 # Or pass the output directory directly
-npx tsx src/export-book-markdown.ts out/<pdf-basename>
+pnpm tsx src/export-book-markdown.ts out/<pdf-basename>
 ```
 
 ### (Optional) Export Book as AI-Narrated Audiobook 🔥
 
 ```sh
-npx tsx src/export-book-audio.ts
+pnpm tsx src/export-book-audio.ts
 ```
 
 - _This takes a few minutes to run._
