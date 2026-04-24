@@ -1,4 +1,4 @@
-import type { Dirent } from 'node:fs'
+import { createWriteStream, type Dirent } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -55,6 +55,28 @@ export function sanitizeDirname(name: string): string {
     .slice(0, 128)
 }
 
+const SCREENSHOT_FILENAME_RE = /(?:^|\/)(\d+)-(\d+)\.png$/
+
+// Parses page screenshot filenames of the form "<index>-<page>.png", optionally
+// prefixed by directory segments. Returns null if the filename doesn't match.
+//
+// Correctness note: an earlier implementation used `/\d*-?(\d+)-(\d+)\.png$/`,
+// which the regex engine expanded greedily and then backtracked, leaving only
+// the last digit of the index in the first capture group (e.g. `281-221.png`
+// → index=1, page=221). That silently corrupted content.json indices. Do not
+// reintroduce optional prefixes here; if a prefix ever appears in the path, it
+// will be on a directory boundary that the `(?:^|\/)` anchor already handles.
+export function parseScreenshotFilename(
+  screenshot: string
+): { index: number; page: number } | null {
+  const m = screenshot.match(SCREENSHOT_FILENAME_RE)
+  if (!m?.[1] || !m[2]) return null
+  const index = Number.parseInt(m[1], 10)
+  const page = Number.parseInt(m[2], 10)
+  if (!Number.isFinite(index) || !Number.isFinite(page)) return null
+  return { index, page }
+}
+
 export async function resolveOutDir(asin: string): Promise<string> {
   const baseOutDir = 'out'
   try {
@@ -81,17 +103,19 @@ export async function resolveOutDir(asin: string): Promise<string> {
   return path.join(baseOutDir, asin)
 }
 
-// Create a timestamped log file in the given outDir and redirect console output to it.
-// Returns the path of the log file and a function to append custom messages.
-export async function setupTimestampedLogger(outDir: string) {
-  const logsDir = path.join(outDir, 'logs')
-  await fs.mkdir(logsDir, { recursive: true })
-  const now = new Date()
-  const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`
-  const logPath = path.join(logsDir, `${timestamp}.log`)
+// Tees `console.log/warn/error` to a file while preserving terminal output.
+// Uses a WriteStream so appended lines stay in call order (unlike fire-and-
+// forget `fs.appendFile`, which can reorder under load).
+export async function setupTeeLogger(logPath: string) {
+  await fs.mkdir(path.dirname(logPath), { recursive: true })
+  const stream = createWriteStream(logPath, { flags: 'a' })
+
+  const origLog = console.log.bind(console)
+  const origWarn = console.warn.bind(console)
+  const origError = console.error.bind(console)
 
   const append = (message: string) => {
-    void fs.appendFile(logPath, message + '\n').catch(() => {})
+    stream.write(message + '\n')
   }
   const formatArgs = (args: any[]) =>
     args
@@ -108,11 +132,33 @@ export async function setupTimestampedLogger(outDir: string) {
       )
       .join(' ')
 
-  console.log = (...args: any[]) => append(formatArgs(args))
-  console.warn = (...args: any[]) => append(formatArgs(args))
-  console.error = (...args: any[]) => append(formatArgs(args))
+  console.log = (...args: any[]) => {
+    origLog(...args)
+    append(formatArgs(args))
+  }
+  console.warn = (...args: any[]) => {
+    origWarn(...args)
+    append(formatArgs(args))
+  }
+  console.error = (...args: any[]) => {
+    origError(...args)
+    append(formatArgs(args))
+  }
+
+  // Flush on natural process exit so short scripts don't drop the tail.
+  process.on('beforeExit', () => stream.end())
 
   return { logPath, append }
+}
+
+// Create a timestamped log file in the given outDir and tee console output to
+// both terminal and file. Returns the path of the log file and a function to
+// append custom messages.
+export async function setupTimestampedLogger(outDir: string) {
+  const now = new Date()
+  const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`
+  const logPath = path.join(outDir, 'logs', `${timestamp}.log`)
+  return setupTeeLogger(logPath)
 }
 
 // A simple terminal progress bar helper

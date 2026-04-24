@@ -2,6 +2,7 @@ import 'dotenv/config'
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import type { BookMetadata, ContentChunk } from './types'
 import {
@@ -108,29 +109,30 @@ function formatPdfTextToMarkdown(body: string): string {
     .trim()
 }
 
-async function main() {
-  const arg = process.argv[2]
+export interface ExportBookMarkdownOptions {
+  outDir: string
+  pdfBasename?: string
+  // When true (default), hijacks console output to a timestamped log file in
+  // `<outDir>/logs/`. Callers that invoke this in a loop or need stdout should
+  // pass `false`.
+  useFileLogger?: boolean
+}
 
-  let outDir: string
-  let pdfBasename: string | undefined
+export interface ExportBookMarkdownResult {
+  markdownPath: string
+  mode: 'kindle' | 'content-only'
+  sectionsProcessed?: number
+  pagesProcessed?: number
+}
 
-  if (arg) {
-    if (/\.pdf$/i.test(arg)) {
-      const pdfPath = path.resolve(arg)
-      pdfBasename = sanitizeDirname(
-        path.basename(pdfPath, path.extname(pdfPath))
-      )
-      outDir = path.join('out', pdfBasename)
-    } else {
-      outDir = path.resolve(arg)
-    }
-  } else {
-    const asin = getEnv('ASIN')
-    assert(asin, 'ASIN is required')
-    outDir = await resolveOutDir(asin)
+export async function exportBookMarkdown(
+  opts: ExportBookMarkdownOptions
+): Promise<ExportBookMarkdownResult> {
+  const { outDir, pdfBasename, useFileLogger = true } = opts
+
+  if (useFileLogger) {
+    await setupTimestampedLogger(outDir)
   }
-
-  await setupTimestampedLogger(outDir)
 
   const content = JSON.parse(
     await fs.readFile(path.join(outDir, 'content.json'), 'utf8')
@@ -166,7 +168,11 @@ async function main() {
     await fs.writeFile(markdownPath, output)
     console.log(`Export complete. Wrote markdown to: ${markdownPath}`)
     console.log(`Pages processed: ${sorted.length}`)
-    return
+    return {
+      markdownPath,
+      mode: 'content-only',
+      pagesProcessed: sorted.length
+    }
   }
 
   // Kindle mode (existing)
@@ -247,6 +253,40 @@ ${text}`
   await fs.writeFile(markdownPath, output)
   console.log(`Export complete. Wrote markdown to: ${markdownPath}`)
   console.log(`TOC sections processed: ${actualProcessableCount}`)
+
+  return {
+    markdownPath,
+    mode: 'kindle',
+    sectionsProcessed: actualProcessableCount
+  }
 }
 
-await main()
+async function main() {
+  const arg = process.argv[2]
+
+  let outDir: string
+  let pdfBasename: string | undefined
+
+  if (arg) {
+    if (/\.pdf$/i.test(arg)) {
+      const pdfPath = path.resolve(arg)
+      pdfBasename = sanitizeDirname(
+        path.basename(pdfPath, path.extname(pdfPath))
+      )
+      outDir = path.join('out', pdfBasename)
+    } else {
+      outDir = path.resolve(arg)
+    }
+  } else {
+    const asin = getEnv('ASIN')
+    assert(asin, 'ASIN is required')
+    outDir = await resolveOutDir(asin)
+  }
+
+  await exportBookMarkdown({ outDir, pdfBasename })
+}
+
+const entry = process.argv[1]
+if (entry && import.meta.url === pathToFileURL(entry).href) {
+  await main()
+}

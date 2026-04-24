@@ -19,11 +19,13 @@ import {
   assert,
   createProgressBar,
   getEnv,
+  parseScreenshotFilename,
   progressBarNewline,
   resolveOutDir,
   sanitizeDirname,
   setupTimestampedLogger
 } from './utils'
+import { verifyBookContent } from './verify-book-content'
 
 function parseNumberEnv(name: string, fallback: number): number {
   const raw = getEnv(name)
@@ -37,6 +39,35 @@ function parseIntEnv(name: string, fallback: number): number {
   if (!raw) return fallback
   const n = Number.parseInt(raw, 10)
   return Number.isFinite(n) ? n : fallback
+}
+
+// Parses a PAGES env var into a predicate over screenshot page numbers.
+// Accepts comma-separated singletons and dash-separated ranges (inclusive),
+// e.g. "221", "281,282", "281-290", "221,281-285". Returns null if unset.
+function parsePageSelectionEnv(
+  name: string
+): ((page: number) => boolean) | null {
+  const raw = getEnv(name)
+  if (!raw) return null
+
+  const ranges: Array<[number, number]> = []
+  for (const part of raw.split(',')) {
+    const token = part.trim()
+    if (!token) continue
+    const m = token.match(/^(\d+)(?:-(\d+))?$/)
+    if (!m) {
+      throw new Error(
+        `invalid ${name} value: ${JSON.stringify(token)} (expected "N" or "N-M")`
+      )
+    }
+    const start = Number.parseInt(m[1]!, 10)
+    const end = m[2] ? Number.parseInt(m[2], 10) : start
+    const lo = Math.min(start, end)
+    const hi = Math.max(start, end)
+    ranges.push([lo, hi])
+  }
+  if (ranges.length === 0) return null
+  return (page: number) => ranges.some(([lo, hi]) => page >= lo && page <= hi)
 }
 
 // Utility function for exponential backoff with jitter
@@ -406,6 +437,11 @@ async function main() {
 
   await setupTimestampedLogger(outDir)
 
+  // Manual-retry selector: when set, re-transcribe only screenshots whose Kindle
+  // page number matches. Existing content.json entries for those screenshots are
+  // dropped before processing so the new OCR replaces them.
+  const pageSelector = parsePageSelectionEnv('PAGES')
+
   // Idempotency: load existing content if present and skip already-processed screenshots
   const contentPath = path.join(outDir, 'content.json')
   let existingContent: ContentChunk[] = []
@@ -416,6 +452,20 @@ async function main() {
       existingContent = parsed as ContentChunk[]
     }
   } catch {}
+
+  if (pageSelector) {
+    const before = existingContent.length
+    existingContent = existingContent.filter((c) => {
+      const parsed = parseScreenshotFilename(c.screenshot)
+      // Keep chunks we can't parse (PDF entries, unusual shapes) — PAGES only
+      // targets screenshot-style content.
+      if (!parsed) return true
+      return !pageSelector(parsed.page)
+    })
+    console.warn(
+      `PAGES selector active: dropped ${before - existingContent.length} existing chunks for re-transcription`
+    )
+  }
 
   const processedScreenshots = new Set<string>(
     existingContent.map((c) => c.screenshot)
@@ -586,21 +636,10 @@ async function main() {
         screenshotsToProcess,
         async (screenshot) => {
           const screenshotBuffer = await fs.readFile(screenshot)
-          // Filenames are like "0000-0001.png" where the first is index and the second is page
-          // Robustly capture both numbers ignoring any leading zeros
-          const metadataMatch = screenshot.match(
-            /(?:^|\/)\d*-?(\d+)-(\d+)\.png$/
-          )
-          assert(
-            metadataMatch?.[1] && metadataMatch?.[2],
-            `invalid screenshot filename: ${screenshot}`
-          )
-          const index = Number.parseInt(metadataMatch[1]!, 10)
-          const page = Number.parseInt(metadataMatch[2]!, 10)
-          assert(
-            !Number.isNaN(index) && !Number.isNaN(page),
-            `invalid screenshot filename: ${screenshot}`
-          )
+          // Filenames are "<index>-<page>.png" (zero-padded), e.g. "281-221.png".
+          const parsed = parseScreenshotFilename(screenshot)
+          assert(parsed, `invalid screenshot filename: ${screenshot}`)
+          const { index, page } = parsed
 
           try {
             const blank = await isBlankPageFromPng(screenshotBuffer, blankOpts)
@@ -657,6 +696,21 @@ async function main() {
   console.log(JSON.stringify(merged, null, 2))
 
   progressBarNewline()
+
+  // Sanity-check the output. Warns on missing screenshots, index/page mismatches
+  // vs. filename, and (if metadata.json is present) chapters with no text in
+  // their page range. To repair a damaged content.json without re-OCR, run
+  // `pnpm tsx src/verify-book-content.ts --repair` separately.
+  const verifyResult = await verifyBookContent({
+    outDir,
+    pageScreenshots: pdfPath ? undefined : pageScreenshots,
+    repair: false
+  })
+  if (verifyResult.issues.length > 0) {
+    console.warn(
+      `Verification found ${verifyResult.issues.length} issue(s); see warnings above.`
+    )
+  }
 }
 
 await main()
