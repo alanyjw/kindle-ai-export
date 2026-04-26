@@ -62,10 +62,20 @@ function isMeaningfulText(text: string | undefined): boolean {
   return text.replaceAll(/\s/g, '').length > 0
 }
 
-function firstChapterWithPage(toc: readonly TocItem[], i: number): number {
+// Find the next TOC entry whose page is strictly greater than `currentPage`.
+// Skipping equal/lower pages handles two common TOC artifacts:
+//   - sub-headings that share a Kindle page with the previous chapter
+//     (nextPage === page → would produce an empty bucket)
+//   - back-matter ordering quirks where Bibliography's "page" is reported
+//     higher than the following chapter's (e.g. Influence: 491 → 449).
+function firstChapterWithPage(
+  toc: readonly TocItem[],
+  i: number,
+  currentPage: number
+): number {
   for (let j = i + 1; j < toc.length; j++) {
     const p = toc[j]?.page
-    if (typeof p === 'number') return p
+    if (typeof p === 'number' && p > currentPage) return p
   }
   return Number.POSITIVE_INFINITY
 }
@@ -200,7 +210,22 @@ export async function verifyBookContent(
     for (let i = 0; i < toc.length; i++) {
       const item = toc[i]!
       if (typeof item.page !== 'number') continue
-      const nextPage = firstChapterWithPage(toc, i)
+      const nextPage = firstChapterWithPage(toc, i, item.page)
+      // Skip the trailing TOC item entirely (typically About-the-Author /
+      // Index / Acknowledgments). These are usually 1–2 pages, often with
+      // photos or sparse text that OCR returns as [BLANK_PAGE]; flagging
+      // them creates noise without surfacing real bugs.
+      const isTrailer = !Number.isFinite(nextPage) && i === toc.length - 1
+      if (isTrailer) continue
+
+      // Skip 1-page ranges. They produce false positives when several TOC
+      // subsections share a Kindle page: the lone chunk for that page is
+      // associated with the first subsection, leaving the rest "empty"
+      // even though the underlying text is fine. The original bug we're
+      // trying to catch (a multi-page chapter rendered as [BLANK_PAGE])
+      // always spans more than one page.
+      if (nextPage - item.page <= 1) continue
+
       const chapterChunks = content.filter(
         (c) => c.page >= item.page! && c.page < nextPage
       )
