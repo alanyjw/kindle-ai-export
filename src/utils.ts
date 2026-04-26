@@ -103,10 +103,26 @@ export async function resolveOutDir(asin: string): Promise<string> {
   return path.join(baseOutDir, asin)
 }
 
-// Tees `console.log/warn/error` to a file while preserving terminal output.
-// Uses a WriteStream so appended lines stay in call order (unlike fire-and-
-// forget `fs.appendFile`, which can reorder under load).
-export async function setupTeeLogger(logPath: string) {
+function formatConsoleArgs(args: unknown[]): string {
+  return args
+    .map((a) =>
+      typeof a === 'string'
+        ? a
+        : (() => {
+            try {
+              return JSON.stringify(a)
+            } catch {
+              return String(a)
+            }
+          })()
+    )
+    .join(' ')
+}
+
+// Open a log file at `logPath` and replace `console.log/warn/error` so they
+// write to the file. If `tee` is true, output also continues to the original
+// terminal sinks. Uses a WriteStream so lines stay in call order.
+async function installFileLogger(logPath: string, tee: boolean) {
   await fs.mkdir(path.dirname(logPath), { recursive: true })
   const stream = createWriteStream(logPath, { flags: 'a' })
 
@@ -117,48 +133,41 @@ export async function setupTeeLogger(logPath: string) {
   const append = (message: string) => {
     stream.write(message + '\n')
   }
-  const formatArgs = (args: any[]) =>
-    args
-      .map((a) =>
-        typeof a === 'string'
-          ? a
-          : (() => {
-              try {
-                return JSON.stringify(a)
-              } catch {
-                return String(a)
-              }
-            })()
-      )
-      .join(' ')
 
   console.log = (...args: any[]) => {
-    origLog(...args)
-    append(formatArgs(args))
+    if (tee) origLog(...args)
+    append(formatConsoleArgs(args))
   }
   console.warn = (...args: any[]) => {
-    origWarn(...args)
-    append(formatArgs(args))
+    if (tee) origWarn(...args)
+    append(formatConsoleArgs(args))
   }
   console.error = (...args: any[]) => {
-    origError(...args)
-    append(formatArgs(args))
+    if (tee) origError(...args)
+    append(formatConsoleArgs(args))
   }
 
-  // Flush on natural process exit so short scripts don't drop the tail.
   process.on('beforeExit', () => stream.end())
 
   return { logPath, append }
 }
 
-// Create a timestamped log file in the given outDir and tee console output to
-// both terminal and file. Returns the path of the log file and a function to
-// append custom messages.
+// Tees `console.log/warn/error` to a file while preserving terminal output.
+// Use for CLIs (e.g. verify --log) where the user wants both an audit trail
+// and live terminal feedback.
+export function setupTeeLogger(logPath: string) {
+  return installFileLogger(logPath, true)
+}
+
+// Create a timestamped log file in the given outDir and redirect console
+// output to it (file only). The progress bar still appears in the terminal
+// since it writes directly to `process.stdout`. Returns the path of the log
+// file and a function to append custom messages.
 export async function setupTimestampedLogger(outDir: string) {
   const now = new Date()
   const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}`
   const logPath = path.join(outDir, 'logs', `${timestamp}.log`)
-  return setupTeeLogger(logPath)
+  return installFileLogger(logPath, false)
 }
 
 // A simple terminal progress bar helper
