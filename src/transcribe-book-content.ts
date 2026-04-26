@@ -143,13 +143,16 @@ function looksLikeOcrRefusal(text: string): boolean {
 
   // Strong signals: these phrases are specific to the model's refusal boilerplate,
   // and are extremely unlikely to be legitimate book text.
+  // NOTE: "please try again" was previously here but appears in real book text
+  // (e.g. quoted error messages from experiments). Removed to avoid spending
+  // the entire 20-retry budget on a perfectly valid OCR'd page.
   const strongMatchers: RegExp[] = [
     /\b(i (can|can't|cannot) (help|assist))\b.*\b(image|uploaded)\b/i,
     /\b(i['’]m unable to (help|view|analyze))\b.*\b(image|uploaded)\b/i,
     /\b(i can'?t identify)\b.*\bpeople\b.*\bimages?\b/i,
     /\bthere'?s nothing visible in the image\b/i,
     /\bblank or not displaying any text\b/i,
-    /\bplease (try again|provide a different image|describe the content)\b/i
+    /\bplease (provide a different image|describe the content)\b/i
   ]
 
   return strongMatchers.some((re) => re.test(t))
