@@ -66,8 +66,9 @@ function isMeaningfulText(text: string | undefined): boolean {
 // Skipping equal/lower pages handles two common TOC artifacts:
 //   - sub-headings that share a Kindle page with the previous chapter
 //     (nextPage === page → would produce an empty bucket)
-//   - back-matter ordering quirks where Bibliography's "page" is reported
-//     higher than the following chapter's (e.g. Influence: 491 → 449).
+//   - back-matter ordering quirks where a chapter's "page" is reported
+//     higher than the following chapter's (some books order back-matter
+//     entries non-monotonically).
 function firstChapterWithPage(
   toc: readonly TocItem[],
   i: number,

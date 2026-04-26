@@ -26,11 +26,10 @@ describe('parseScreenshotFilename', () => {
   })
 
   it('parses filenames with directory prefixes', () => {
-    expect(
-      parseScreenshotFilename(
-        'out/B015VACHOK-High Output Management/pages/281-221.png'
-      )
-    ).toEqual({ index: 281, page: 221 })
+    expect(parseScreenshotFilename('out/BOOK_DIR/pages/281-221.png')).toEqual({
+      index: 281,
+      page: 221
+    })
   })
 
   it('regression: does NOT truncate multi-digit indices', () => {

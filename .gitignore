@@ -42,3 +42,7 @@ next-env.d.ts
 
 old/
 out/
+
+# local-only assistant context and browser auth state
+CLAUDE.md
+playwright-auth-state.json
