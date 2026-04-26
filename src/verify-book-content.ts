@@ -178,25 +178,28 @@ export async function verifyBookContent(
   // A chunk is an orphan if its screenshot path doesn't resolve to a real
   // file on disk. This catches the "stale-prefix" case (dir renamed from
   // ASIN → ASIN-Title with content.json still referencing the old prefix)
-  // even when basenames match. Missing-screenshot is the inverse: a file
-  // exists in pages/ with no corresponding chunk.
+  // even when basenames match.
+  //
+  // With --repair we try two recoveries before dropping:
+  //   1. Rewrite the chunk's screenshot to the live path with the same
+  //      basename, if exactly one such live screenshot exists. This rescues
+  //      stale-prefix chunks without losing the existing OCR text.
+  //   2. If a chunk with the live path already exists (i.e. we'd create a
+  //      duplicate), drop the orphan instead.
+  //   3. Otherwise (basename has no live screenshot at all), drop.
   let droppedOrphans = 0
+  let rewrittenOrphans = 0
   if (screenshots.length > 0) {
-    const liveByPath = new Set<string>()
+    const screenshotByBasename = new Map<string, string>()
+    for (const s of screenshots) screenshotByBasename.set(path.basename(s), s)
+
+    // Compute coverage AFTER orphan-rewrite would happen, so missing-screenshot
+    // reflects post-repair state in dry-run too.
+    const livePaths = new Set<string>()
     for (const c of content) {
       if (c.screenshot.startsWith('pdf:')) continue
       if (await fileExists(c.screenshot)) {
-        liveByPath.add(path.basename(c.screenshot))
-      }
-    }
-
-    const screenshotBasenames = new Set(
-      screenshots.map((s) => path.basename(s))
-    )
-
-    for (const s of screenshots) {
-      if (!liveByPath.has(path.basename(s))) {
-        issues.push({ kind: 'missing-screenshot', screenshot: s })
+        livePaths.add(c.screenshot)
       }
     }
 
@@ -204,30 +207,53 @@ export async function verifyBookContent(
     for (let i = 0; i < content.length; i++) {
       const c = content[i]!
       if (c.screenshot.startsWith('pdf:')) continue
-      // Orphan if the path doesn't exist AND its basename also isn't covered
-      // by a live screenshot (in which case it's stale-prefix dup, definitely
-      // orphan). If basename IS covered by a live screenshot but this path
-      // doesn't exist → also orphan (the live one wins).
-      const exists = await fileExists(c.screenshot)
-      if (!exists) {
-        issues.push({ kind: 'orphan-chunk', screenshot: c.screenshot })
-        orphanIndexes.push(i)
-        continue
-      }
-      // Path exists but no screenshot file by that basename in pages/dir —
-      // shouldn't happen normally, but flag for visibility.
-      if (!screenshotBasenames.has(path.basename(c.screenshot))) {
-        issues.push({ kind: 'orphan-chunk', screenshot: c.screenshot })
-      }
+      if (livePaths.has(c.screenshot)) continue
+      issues.push({ kind: 'orphan-chunk', screenshot: c.screenshot })
+      orphanIndexes.push(i)
     }
 
     if (repair && orphanIndexes.length > 0) {
-      // Drop orphans in reverse order so indexes stay valid.
-      for (let i = orphanIndexes.length - 1; i >= 0; i--) {
-        content.splice(orphanIndexes[i]!, 1)
+      // Walk orphans: try rewrite first, drop the rest.
+      const liveByBasename = new Map<string, string>()
+      for (const p of livePaths) liveByBasename.set(path.basename(p), p)
+
+      const toDrop: number[] = []
+      for (const i of orphanIndexes) {
+        const c = content[i]!
+        const live = screenshotByBasename.get(path.basename(c.screenshot))
+        if (live && !liveByBasename.has(path.basename(live))) {
+          // No existing chunk for the live path — adopt this one.
+          c.screenshot = live
+          liveByBasename.set(path.basename(live), live)
+          livePaths.add(live)
+          rewrittenOrphans++
+        } else {
+          toDrop.push(i)
+        }
+      }
+      // Drop in reverse so earlier indexes stay valid.
+      for (let i = toDrop.length - 1; i >= 0; i--) {
+        content.splice(toDrop[i]!, 1)
         droppedOrphans++
       }
-      console.log(`verify: dropped ${droppedOrphans} orphan chunk(s)`)
+      if (rewrittenOrphans > 0) {
+        console.log(
+          `verify: rewrote ${rewrittenOrphans} orphan chunk path(s) to live screenshot(s)`
+        )
+      }
+      if (droppedOrphans > 0) {
+        console.log(
+          `verify: dropped ${droppedOrphans} unsalvageable orphan chunk(s)`
+        )
+      }
+    }
+
+    // Recompute coverage for missing-screenshot after any repair.
+    const liveBasenames = new Set([...livePaths].map((p) => path.basename(p)))
+    for (const s of screenshots) {
+      if (!liveBasenames.has(path.basename(s))) {
+        issues.push({ kind: 'missing-screenshot', screenshot: s })
+      }
     }
   }
 
@@ -295,7 +321,8 @@ export async function verifyBookContent(
   }
 
   const modifiedFiles: string[] = []
-  if (repair && (repairedCount > 0 || droppedOrphans > 0)) {
+  const totalRepairs = repairedCount + droppedOrphans + rewrittenOrphans
+  if (repair && totalRepairs > 0) {
     const sorted = [...content].sort(
       (a, b) => a.index - b.index || a.page - b.page
     )
@@ -303,7 +330,9 @@ export async function verifyBookContent(
     modifiedFiles.push(contentPath)
     const parts: string[] = []
     if (repairedCount > 0) parts.push(`${repairedCount} field(s)`)
-    if (droppedOrphans > 0) parts.push(`${droppedOrphans} orphan chunk(s)`)
+    if (rewrittenOrphans > 0)
+      parts.push(`${rewrittenOrphans} rewritten orphan(s)`)
+    if (droppedOrphans > 0) parts.push(`${droppedOrphans} dropped orphan(s)`)
     console.log(
       `verify: repaired ${parts.join(', ')} in content.json (wrote ${contentPath})`
     )
@@ -313,7 +342,7 @@ export async function verifyBookContent(
   return {
     issues,
     modifiedFiles,
-    repairedFieldCount: repairedCount + droppedOrphans,
+    repairedFieldCount: totalRepairs,
     contentPath
   }
 }
