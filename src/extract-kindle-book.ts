@@ -362,9 +362,20 @@ async function main() {
     await delay(200)
     await page.locator('ion-button[aria-label="Reader menu"]').click()
     await delay(1000)
-    await page
-      .locator('ion-item[role="listitem"]', { hasText: 'Go to Page' })
-      .click()
+    // Page-mode books have a "Go to Page" menu item; location-mode books
+    // (reflowable text without publisher pagination) have "Go to Location"
+    // instead. Try both.
+    const $goToPage = page.locator('ion-item[role="listitem"]', {
+      hasText: 'Go to Page'
+    })
+    const $goToLocation = page.locator('ion-item[role="listitem"]', {
+      hasText: 'Go to Location'
+    })
+    if (await $goToPage.isVisible().catch(() => false)) {
+      await $goToPage.click()
+    } else {
+      await $goToLocation.click()
+    }
     await page
       .locator('ion-modal input[placeholder="page number"]')
       .fill(`${pageNumber}`)
@@ -390,15 +401,35 @@ async function main() {
     })
   }
 
-  async function dismissPossibleAlert() {
+  async function dismissPossibleAlert(waitMs = 0) {
+    // Kindle sometimes pops a "Most Recent Page Read — Go to location X?" alert
+    // a beat after the reader loads, so callers can wait briefly for it to
+    // appear instead of racing past it.
     const $alertNo = page.locator('ion-alert button', { hasText: 'No' })
+    try {
+      await $alertNo.waitFor({ state: 'visible', timeout: waitMs })
+    } catch {
+      // No alert appeared within the timeout — nothing to dismiss.
+      return
+    }
     if (await $alertNo.isVisible()) {
-      $alertNo.click()
+      await $alertNo.click()
+      // Wait for the backdrop/alert to fully close before proceeding so
+      // subsequent clicks aren't intercepted.
+      await page
+        .locator('ion-alert')
+        .waitFor({ state: 'hidden', timeout: 5000 })
+        .catch(() => {})
     }
   }
 
-  await dismissPossibleAlert()
+  // Initial dismiss with a short wait — handles both the "alert is already up"
+  // and "alert appears within ~3s" cases.
+  await dismissPossibleAlert(3000)
   await ensureFixedHeaderUI()
+  // One more dismiss in case the alert appeared between calls (the reader UI
+  // can be flaky about when it shows the sync prompt).
+  await dismissPossibleAlert(500)
   await updateSettings()
 
   const initialPageNav = await getPageNav()
@@ -482,9 +513,7 @@ async function main() {
   await parsedToc.firstPageTocItem.locator!.click()
 
   const totalContentPages = Math.min(
-    parsedToc.afterLastPageTocItem?.page
-      ? parsedToc.afterLastPageTocItem!.page
-      : total,
+    parsedToc.afterLastContentPosition ?? total,
     total
   )
   assert(totalContentPages > 0, 'No content pages found')
@@ -563,28 +592,34 @@ async function main() {
     `reading ${totalContentPages} pages${total > totalContentPages ? ` (of ${total} total pages stopping at "${parsedToc.afterLastPageTocItem!.title}")` : ''}...`
   )
 
-  // Always navigate to startPage. The TOC iteration above clicks every TOC
-  // entry to record its page/location; for books whose last TOC entry sits at
-  // the end of the book (e.g. "Also by …" landing at page N/N), the browser
-  // ends up parked at the final page. Without this navigate, the capture
-  // loop's `pageNav.page >= totalContentPages` guard fires on the first
-  // iteration and 0 pages get captured. Calling `goToPage(1)` on a fresh run
-  // is cheap and makes the start state deterministic.
-  console.warn(`📖 Navigating to page ${startPage}...`)
-  await goToPage(startPage)
+  // Navigate to startPage when resuming. For fresh runs (startPage === 1) we
+  // rely on `firstPageTocItem.locator!.click()` above to have landed the
+  // reader at the start of the main content. Calling goToPage on a fresh run
+  // is also unsafe for location-mode books, where the "Go to Page/Location"
+  // modal placeholder differs from the page-mode case.
+  if (startPage > 1) {
+    console.warn(`📖 Navigating to page ${startPage}...`)
+    await goToPage(startPage)
+  }
 
   // Progress bar setup
   const currentNavAtStart = await getPageNav()
-  const startAtPage = currentNavAtStart?.page ?? startPage
+  const startAtPage =
+    currentNavAtStart?.page ?? currentNavAtStart?.location ?? startPage
   const totalToRead = Math.max(0, totalContentPages - startAtPage)
   const bar = createProgressBar(totalToRead)
 
   do {
     const pageNav = await getPageNav()
-    if (pageNav?.page === undefined) {
+    // For location-mode books `pageNav.page` is undefined and the position is
+    // exposed as `pageNav.location`. Treat them uniformly downstream — the
+    // PageChunk's `page` field stores whichever position the reader uses for
+    // this book.
+    const position = pageNav?.page ?? pageNav?.location
+    if (position === undefined) {
       break
     }
-    if (pageNav.page >= totalContentPages) {
+    if (position >= totalContentPages) {
       break
     }
 
@@ -593,19 +628,19 @@ async function main() {
       pageScreenshotsDir,
       `${index}`.padStart(pagePadding, '0') +
         '-' +
-        `${pageNav.page}`.padStart(pagePadding, '0') +
+        `${position}`.padStart(pagePadding, '0') +
         '.png'
     )
 
     // Skip if screenshot already exists (unless force mode)
     if (!force && (await fileExists(screenshotPath))) {
-      console.warn(`⏭️  Skipping page ${pageNav.page} (already exists)`)
+      console.warn(`⏭️  Skipping page ${position} (already exists)`)
 
       // Still add to pages array for consistency
       pages.push({
         index,
-        page: pageNav.page,
-        total: pageNav.total,
+        page: position,
+        total: pageNav!.total,
         screenshot: screenshotPath
       })
 
@@ -653,8 +688,8 @@ async function main() {
     await fs.writeFile(screenshotPath, b)
     pages.push({
       index,
-      page: pageNav.page,
-      total: pageNav.total,
+      page: position,
+      total: pageNav!.total,
       screenshot: screenshotPath
     })
 
@@ -667,7 +702,7 @@ async function main() {
     // the screenshot changing the DOM temporarily and not being stable yet.
     await delay(100)
 
-    if (pageNav.page >= totalContentPages) {
+    if (position >= totalContentPages) {
       break
     }
 
@@ -710,7 +745,7 @@ async function main() {
         break
       }
 
-      if (pageNav.page >= totalContentPages) {
+      if (position >= totalContentPages) {
         break
       }
 
@@ -858,18 +893,38 @@ function parsePageNav(text: string | null): PageNav | undefined {
 }
 
 function parseTocItems(tocItems: TocItem[]) {
-  // Find the first page in the TOC which contains the main book content
-  // (after the title, table of contents, copyright, etc)
-  const firstPageTocItem = tocItems.find((item) => item.page !== undefined)
-  assert(firstPageTocItem, 'Unable to find first valid page in TOC')
+  // Some Kindle books expose page numbers in the reader footer; reflowable
+  // text books only expose locations. Detect by majority: front matter (Cover,
+  // Title Page, etc.) often only reports location even in page-mode books, so
+  // we can't just inspect the first TOC item. Conversely, some location-only
+  // books carry one stray back-matter entry with a publisher page number from
+  // a separate pagination scheme. Prefer location mode only when locations
+  // strictly outnumber pages.
+  const pageCount = tocItems.filter((i) => i.page !== undefined).length
+  const locationCount = tocItems.filter((i) => i.location !== undefined).length
+  const useLocationMode = locationCount > pageCount
 
-  // Try to find the first page in the TOC after the main book content
-  // (e.g. acknowledgements, about the author, etc)
+  const positionOf = (item: TocItem): number | undefined =>
+    useLocationMode ? item.location : item.page
+
+  // Find the first TOC entry with the active position type — this is the
+  // start of the main book content (after title/TOC/copyright).
+  const firstPageTocItem = tocItems.find(
+    (item) => positionOf(item) !== undefined
+  )
+  assert(
+    firstPageTocItem,
+    `Unable to find first valid TOC item (location-mode: ${useLocationMode})`
+  )
+
+  // Try to find the first TOC entry AFTER the main book content (back matter:
+  // acknowledgements, about the author, etc).
   const afterLastPageTocItem = tocItems.find((item) => {
-    if (item.page === undefined) return false
+    const pos = positionOf(item)
+    if (pos === undefined) return false
     if (item === firstPageTocItem) return false
 
-    const percentage = item.page / item.total
+    const percentage = pos / item.total
     if (percentage < 0.9) return false
 
     if (/acknowledgements/i.test(item.title)) return true
@@ -891,7 +946,12 @@ function parseTocItems(tocItems: TocItem[]) {
 
   return {
     firstPageTocItem,
-    afterLastPageTocItem
+    afterLastPageTocItem,
+    useLocationMode,
+    firstContentPosition: positionOf(firstPageTocItem)!,
+    afterLastContentPosition: afterLastPageTocItem
+      ? positionOf(afterLastPageTocItem)
+      : undefined
   }
 }
 
