@@ -3,7 +3,6 @@ import 'dotenv/config'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import { globby } from 'globby'
 import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
@@ -431,7 +430,14 @@ async function main() {
 
     outDir = await resolveOutDir(asin)
     pageScreenshotsDir = path.join(outDir, 'pages')
-    pageScreenshots = await globby(`${pageScreenshotsDir}/*.png`)
+    // fs.readdir over globby: book directory names can contain glob
+    // metacharacters like `()` that fast-glob would interpret as patterns,
+    // silently returning zero matches.
+    const dirEntries = await fs.readdir(pageScreenshotsDir).catch(() => [])
+    pageScreenshots = dirEntries
+      .filter((f) => f.endsWith('.png'))
+      .map((f) => path.join(pageScreenshotsDir!, f))
+      .sort()
     assert(
       pageScreenshots.length,
       `no page screenshots found: ${pageScreenshotsDir}`

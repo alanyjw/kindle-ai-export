@@ -4,8 +4,6 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { globby } from 'globby'
-
 import { exportBookMarkdown } from './export-book-markdown'
 import { closePdfRenderer, getPdfPageCount } from './pdf'
 import type { BookMetadata, ContentChunk, TocItem } from './types'
@@ -150,9 +148,19 @@ export async function verifyBookContent(
   assert(Array.isArray(content), `content.json is not an array: ${contentPath}`)
 
   const pagesDir = path.join(outDir, 'pages')
+  // fs.readdir over globby: directory names can contain glob metacharacters
+  // (e.g. `()`) that fast-glob would interpret as patterns and silently miss.
   const screenshots =
     opts.pageScreenshots ??
-    (await globby(`${pagesDir}/*.png`).catch(() => [] as string[]))
+    (await fs
+      .readdir(pagesDir)
+      .then((entries) =>
+        entries
+          .filter((f) => f.endsWith('.png'))
+          .map((f) => path.join(pagesDir, f))
+          .sort()
+      )
+      .catch(() => [] as string[]))
 
   const issues: VerificationIssue[] = []
 

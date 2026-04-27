@@ -185,13 +185,27 @@ export async function exportBookMarkdown(
   const title = metadata.meta.title
   const authors = metadata.meta.authorList
 
-  // Count actual items that will be processed (have page numbers and can find content)
+  // Detect location-mode by majority — mirrors the extract pipeline. Hybrid
+  // books like reflowable text with one stray back-matter page entry are
+  // dominated by location entries and should be treated as location-mode.
+  const tocPageCount = metadata.toc.filter(
+    (i) => i.page !== undefined
+  ).length
+  const tocLocationCount = metadata.toc.filter(
+    (i) => i.location !== undefined
+  ).length
+  const useLocationMode = tocLocationCount > tocPageCount
+  const tocPositionOf = (item: { page?: number; location?: number }) =>
+    useLocationMode ? item.location : item.page
+
+  // Count actual items that will be processed (have positions and can find content)
   let actualProcessableCount = 0
   for (let i = 0; i < metadata.toc.length - 1; i++) {
     const tocItem = metadata.toc[i]!
-    if (tocItem.page === undefined) continue
+    const pos = tocPositionOf(tocItem)
+    if (pos === undefined) continue
 
-    const startIndex = content.findIndex((c) => c.page >= tocItem.page!)
+    const startIndex = content.findIndex((c) => c.page >= pos)
     if (startIndex !== -1) actualProcessableCount++
   }
 
@@ -206,7 +220,7 @@ By ${authors.join(', ')}
 ## Table of Contents
 
 ${metadata.toc
-  .filter((tocItem) => tocItem.page !== undefined)
+  .filter((tocItem) => tocPositionOf(tocItem) !== undefined)
   .map(
     (tocItem) =>
       `- [${tocItem.title}](#${tocItem.title.toLowerCase().replaceAll(/[^\da-z]+/g, '-')})`
@@ -217,13 +231,16 @@ ${metadata.toc
 
   for (let i = 0; i < metadata.toc.length - 1; i++) {
     const tocItem = metadata.toc[i]!
-    if (tocItem.page === undefined) continue
+    const pos = tocPositionOf(tocItem)
+    if (pos === undefined) continue
 
     const nextTocItem = metadata.toc[i + 1]!
-    const startIndex = content.findIndex((c) => c.page >= tocItem.page!)
-    const endIndex = nextTocItem.page
-      ? content.findIndex((c) => c.page >= nextTocItem.page!)
-      : content.length
+    const nextPos = tocPositionOf(nextTocItem)
+    const startIndex = content.findIndex((c) => c.page >= pos)
+    const endIndex =
+      nextPos !== undefined
+        ? content.findIndex((c) => c.page >= nextPos)
+        : content.length
 
     if (startIndex === -1) continue
 
