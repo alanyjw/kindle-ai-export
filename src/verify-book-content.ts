@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { globby } from 'globby'
 
 import { exportBookMarkdown } from './export-book-markdown'
+import { closePdfRenderer, getPdfPageCount } from './pdf'
 import type { BookMetadata, ContentChunk, TocItem } from './types'
 import {
   assert,
@@ -53,8 +54,39 @@ export type VerificationIssue =
       page: number
       nextPage?: number
     }
+  | {
+      kind: 'missing-pdf-source'
+      source: string
+    }
+  | {
+      kind: 'missing-pdf-page'
+      source: string
+      page: number
+    }
+  | {
+      kind: 'pdf-page-out-of-range'
+      source: string
+      page: number
+      pageCount: number
+    }
+  | {
+      kind: 'mixed-source'
+      pdfCount: number
+      otherCount: number
+    }
 
 const BLANK_MARKER_RE = /^\s*\[BLANK_PAGE]\s*$/
+const PDF_REF_RE = /^pdf:(.+)#page=(\d+)$/
+
+function parsePdfRef(
+  screenshot: string
+): { source: string; page: number } | null {
+  const m = screenshot.match(PDF_REF_RE)
+  if (!m) return null
+  const page = Number(m[2])
+  if (!Number.isFinite(page) || page < 1) return null
+  return { source: m[1]!, page }
+}
 
 function isMeaningfulText(text: string | undefined): boolean {
   if (!text) return false
@@ -132,8 +164,24 @@ export async function verifyBookContent(
 
     const parsed = parseScreenshotFilename(chunk.screenshot)
     if (!parsed) {
-      // Non-screenshot chunks (e.g. `pdf:...#page=N`) are skipped.
-      if (!chunk.screenshot.startsWith('pdf:')) {
+      // PDF chunks use `pdf:<abs-path>#page=N` instead of a screenshot
+      // filename. Verify the page number in the URL matches `chunk.page`;
+      // everything else PDF-specific is checked in section 3.
+      const pdfRef = parsePdfRef(chunk.screenshot)
+      if (pdfRef) {
+        if (chunk.page !== pdfRef.page) {
+          issues.push({
+            kind: 'page-mismatch',
+            screenshot: chunk.screenshot,
+            stored: chunk.page,
+            expected: pdfRef.page
+          })
+          if (repair) {
+            chunk.page = pdfRef.page
+            repairedCount++
+          }
+        }
+      } else {
         issues.push({
           kind: 'unparseable-screenshot',
           screenshot: chunk.screenshot
@@ -258,7 +306,74 @@ export async function verifyBookContent(
     }
   }
 
-  // --- 3. Chapter coverage (only when metadata.json is present) ------------
+  // --- 3. PDF source coverage (only when content references a PDF) ---------
+  // For PDF-derived runs, each chunk's `screenshot` is `pdf:<abs>#page=N`.
+  // Verify:
+  //   - the source PDF still exists at the recorded path
+  //   - every page 1..pageCount is represented exactly once
+  //   - no chunk references a page outside [1, pageCount]
+  //   - content.json doesn't accidentally mix PDF + screenshot chunks
+  const pdfRefs: Array<{ source: string; page: number }> = []
+  for (const chunk of content) {
+    const ref = parsePdfRef(chunk.screenshot)
+    if (ref) pdfRefs.push(ref)
+  }
+
+  if (pdfRefs.length > 0) {
+    const otherCount = content.length - pdfRefs.length
+    if (otherCount > 0) {
+      issues.push({
+        kind: 'mixed-source',
+        pdfCount: pdfRefs.length,
+        otherCount
+      })
+    }
+
+    const sources = new Set(pdfRefs.map((r) => r.source))
+    for (const source of sources) {
+      if (!(await fileExists(source))) {
+        issues.push({ kind: 'missing-pdf-source', source })
+        continue
+      }
+
+      let pageCount: number
+      try {
+        pageCount = await getPdfPageCount(source)
+      } catch (err: any) {
+        console.warn(
+          `verify: could not read page count from ${source}: ${err?.message || err}`
+        )
+        continue
+      }
+
+      const seen = new Set(
+        pdfRefs.filter((r) => r.source === source).map((r) => r.page)
+      )
+      for (let p = 1; p <= pageCount; p++) {
+        if (!seen.has(p)) {
+          issues.push({ kind: 'missing-pdf-page', source, page: p })
+        }
+      }
+      for (const p of seen) {
+        if (p < 1 || p > pageCount) {
+          issues.push({
+            kind: 'pdf-page-out-of-range',
+            source,
+            page: p,
+            pageCount
+          })
+        }
+      }
+    }
+
+    // Drop the cached pdfjs documents we just opened — verify is short-lived
+    // but we may be looping over many books.
+    for (const source of sources) {
+      await closePdfRenderer(source).catch(() => {})
+    }
+  }
+
+  // --- 4. Chapter coverage (only when metadata.json is present) ------------
   const metadataPath = path.join(outDir, 'metadata.json')
   if (await fileExists(metadataPath)) {
     const metadata = JSON.parse(
