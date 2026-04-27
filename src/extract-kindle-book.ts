@@ -173,7 +173,17 @@ async function main() {
         }
       }
 
-      if (extractedPages >= expectedPages) {
+      // A prior run that wrote metadata.json but never managed to save a single
+      // screenshot leaves both `existingPages.length` and `actualScreenshots` at
+      // 0. With `expectedPages` falling back to `existingPages.length`, the
+      // generic check below would evaluate `0 >= 0` and declare the run
+      // "complete" — making it impossible to resume without FORCE=true. Treat
+      // a zero-progress state as definitely incomplete instead.
+      if (extractedPages === 0) {
+        console.warn(
+          `${colors.yellow}⚠️  Prior extraction left no screenshots. Treating as incomplete and resuming from page ${colors.bright}1${colors.reset}${colors.yellow}...${colors.reset}`
+        )
+      } else if (extractedPages >= expectedPages) {
         console.warn(
           `${colors.green}✅ Extraction appears complete. Use FORCE=true to re-extract.${colors.reset}`
         )
@@ -553,11 +563,15 @@ async function main() {
     `reading ${totalContentPages} pages${total > totalContentPages ? ` (of ${total} total pages stopping at "${parsedToc.afterLastPageTocItem!.title}")` : ''}...`
   )
 
-  // Navigate to start page if resuming
-  if (startPage > 1) {
-    console.warn(`📖 Navigating to page ${startPage}...`)
-    await goToPage(startPage)
-  }
+  // Always navigate to startPage. The TOC iteration above clicks every TOC
+  // entry to record its page/location; for books whose last TOC entry sits at
+  // the end of the book (e.g. "Also by …" landing at page N/N), the browser
+  // ends up parked at the final page. Without this navigate, the capture
+  // loop's `pageNav.page >= totalContentPages` guard fires on the first
+  // iteration and 0 pages get captured. Calling `goToPage(1)` on a fresh run
+  // is cheap and makes the start state deterministic.
+  console.warn(`📖 Navigating to page ${startPage}...`)
+  await goToPage(startPage)
 
   // Progress bar setup
   const currentNavAtStart = await getPageNav()
