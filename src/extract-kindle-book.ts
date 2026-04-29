@@ -736,31 +736,26 @@ async function main() {
       break
     }
 
-    let retries = 0
-
-    // Occasionally the next page button doesn't work, so ensure that the main
-    // image src actually changes before continuing.
-    do {
+    // Advance to the next page. Click once, then poll the rendered image
+    // src for a change with a generous timeout. Only re-click on an actual
+    // timeout (rare lost click), capped at 3 attempts. The previous
+    // implementation re-clicked on a fixed 1s cadence and queued multiple
+    // chevron events on slow renders — the reader processed every queued
+    // click, advancing past pages we hadn't captured yet (~25% skip rate
+    // observed). Single-click + bounded poll eliminates the queueing.
+    const advanceTimeoutMs = 5000
+    const maxAdvanceAttempts = 3
+    let advanced = false
+    for (
+      let attempt = 0;
+      attempt < maxAdvanceAttempts && !advanced;
+      attempt++
+    ) {
       try {
-        // Navigate to the next page
-        // await delay(100)
-        if (retries % 10 === 0) {
-          if (retries > 0) {
-            console.warn('retrying...', {
-              src,
-              retries,
-              ...pages.at(-1)
-            })
-          }
-
-          // Click the next page button
-          await page
-            .locator('.kr-chevron-container-right')
-            .click({ timeout: 1000 })
-        }
-        // await delay(500)
+        await page
+          .locator('.kr-chevron-container-right')
+          .click({ timeout: 1000 })
       } catch (err: any) {
-        // No next page to navigate to
         console.warn(
           'unable to navigate to next page; breaking...',
           err.message
@@ -768,21 +763,24 @@ async function main() {
         break
       }
 
-      const newSrc = await page
-        .locator(krRendererMainImageSelector)
-        .getAttribute('src')
-      if (newSrc !== src) {
-        break
+      const startMs = Date.now()
+      while (Date.now() - startMs < advanceTimeoutMs) {
+        const newSrc = await page
+          .locator(krRendererMainImageSelector)
+          .getAttribute('src')
+        if (newSrc !== src) {
+          advanced = true
+          break
+        }
+        await delay(100)
       }
 
-      if (position >= totalContentPages) {
-        break
+      if (!advanced && attempt < maxAdvanceAttempts - 1) {
+        console.warn(
+          `next-page click did not advance src within ${advanceTimeoutMs}ms (attempt ${attempt + 1}/${maxAdvanceAttempts}); retrying...`
+        )
       }
-
-      await delay(100)
-
-      ++retries
-    } while (true)
+    }
   } while (true)
 
   progressBarNewline()
