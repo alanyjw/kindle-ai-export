@@ -609,6 +609,11 @@ async function main() {
   const totalToRead = Math.max(0, totalContentPages - startAtPage)
   const bar = createProgressBar(totalToRead)
 
+  // Stall detection. See guard inside the loop for the why.
+  let lastObservedPosition: number | undefined
+  let stuckCount = 0
+  const maxStuckIterations = 3
+
   do {
     const pageNav = await getPageNav()
     // For location-mode books `pageNav.page` is undefined and the position is
@@ -622,6 +627,30 @@ async function main() {
     if (position >= totalContentPages) {
       break
     }
+
+    // The reader can land on a "last extractable" page that sits below
+    // totalContentPages — e.g. page 233 of 234 when the back cover isn't
+    // navigable via the chevron. Clicking next then either throws (caught by
+    // the inner navigation loop's catch) or no-ops with a brief src flicker
+    // that fools the inner loop into thinking we advanced. Either way the
+    // outer loop returns here with the same position. Without this guard it
+    // would re-screenshot the same page indefinitely (observed: 500+
+    // duplicates of one page).
+    if (
+      lastObservedPosition !== undefined &&
+      position <= lastObservedPosition
+    ) {
+      stuckCount += 1
+      if (stuckCount >= maxStuckIterations) {
+        console.warn(
+          `${colors.yellow}⚠️  Reader stalled at position ${position} across ${stuckCount + 1} iterations — cannot advance past this page. Stopping extraction.${colors.reset}`
+        )
+        break
+      }
+    } else {
+      stuckCount = 0
+    }
+    lastObservedPosition = position
 
     const index = pages.length
     const screenshotPath = path.join(
