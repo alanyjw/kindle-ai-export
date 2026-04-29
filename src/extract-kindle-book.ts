@@ -610,9 +610,9 @@ async function main() {
   const bar = createProgressBar(totalToRead)
 
   // Stall detection. See guard inside the loop for the why.
-  let lastObservedPosition: number | undefined
+  let lastSrc: string | null | undefined
   let stuckCount = 0
-  const maxStuckIterations = 3
+  const maxStuckIterations = 2
 
   do {
     const pageNav = await getPageNav()
@@ -628,29 +628,34 @@ async function main() {
       break
     }
 
-    // The reader can land on a "last extractable" page that sits below
-    // totalContentPages — e.g. page 233 of 234 when the back cover isn't
-    // navigable via the chevron. Clicking next then either throws (caught by
-    // the inner navigation loop's catch) or no-ops with a brief src flicker
-    // that fools the inner loop into thinking we advanced. Either way the
-    // outer loop returns here with the same position. Without this guard it
-    // would re-screenshot the same page indefinitely (observed: 500+
-    // duplicates of one page).
-    if (
-      lastObservedPosition !== undefined &&
-      position <= lastObservedPosition
-    ) {
+    const src = await page
+      .locator(krRendererMainImageSelector)
+      .getAttribute('src')
+
+    // The reader can land on a "last extractable" page where the chevron
+    // click no longer changes the rendered image. The inner navigation loop
+    // exits via its catch, but the outer loop would otherwise re-iterate
+    // forever, re-screenshotting the same content (observed: 500+ duplicates
+    // of one page). Detect this by tracking the image src across outer
+    // iterations: if it stops changing, we're truly stuck.
+    //
+    // We deliberately key on src rather than the footer page label, because
+    // a single print page can span multiple screens (each with a unique src)
+    // and we don't want to bail prematurely on those — that would truncate
+    // content. Empirically pages typically have 1–3 screens but can have
+    // more; src repetition is the only reliable "no progress" signal.
+    if (lastSrc !== undefined && src === lastSrc) {
       stuckCount += 1
       if (stuckCount >= maxStuckIterations) {
         console.warn(
-          `${colors.yellow}⚠️  Reader stalled at position ${position} across ${stuckCount + 1} iterations — cannot advance past this page. Stopping extraction.${colors.reset}`
+          `${colors.yellow}⚠️  Reader stalled — image src unchanged across ${stuckCount + 1} iterations at position ${position}. Stopping extraction.${colors.reset}`
         )
         break
       }
     } else {
       stuckCount = 0
     }
-    lastObservedPosition = position
+    lastSrc = src
 
     const index = pages.length
     const screenshotPath = path.join(
@@ -705,10 +710,6 @@ async function main() {
 
       continue
     }
-
-    const src = await page
-      .locator(krRendererMainImageSelector)
-      .getAttribute('src')
 
     const b = await page
       .locator(krRendererMainImageSelector)
