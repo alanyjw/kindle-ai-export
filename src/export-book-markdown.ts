@@ -16,6 +16,67 @@ import {
   setupTimestampedLogger
 } from './utils'
 
+// Joins chunks while removing overlapping or duplicate text between adjacent
+// chunks. Multi-screen captures of the same print page often produce chunks
+// whose OCR text fully overlaps (the chevron click changed `src` but the
+// rendered content was effectively identical) or partially overlaps (the
+// content slid by a few lines). Naive concatenation duplicates citations,
+// title cards, and chapter ends in the .md. Detecting and stripping these
+// overlaps at join time keeps the source content.json untouched.
+function joinChunksDedupingOverlap(
+  chunks: ReadonlyArray<{ text: string }>,
+  separator: string
+): string {
+  if (chunks.length === 0) return ''
+
+  const normalize = (s: string): string => s.replaceAll(/\s+/g, ' ').trim()
+  // Strip the OCR's AI-generated descriptor lines (`[OTHER] ...`, `[ICON] ...`).
+  // These describe imagery rather than transcribe text, and consecutive screen
+  // captures of the same image often emit different wordings for the same
+  // descriptor — so they break naive equality even when the actual text content
+  // of the two chunks is identical.
+  const stripDescriptors = (s: string): string =>
+    normalize(s.replaceAll(/\[(?:OTHER|ICON)\][^\n]*/g, ''))
+
+  const out: string[] = [chunks[0]!.text]
+  for (let i = 1; i < chunks.length; i++) {
+    const prev = out.at(-1)!
+    const next = chunks[i]!.text
+
+    // Case 1: full duplicate — next is contained in prev modulo whitespace.
+    const prevN = normalize(prev)
+    const nextN = normalize(next)
+    if (nextN.length > 0 && prevN.includes(nextN)) {
+      continue
+    }
+
+    // Case 2: same text content, just different AI image descriptors. Catches
+    // chapter-title cards where the print page is mostly imagery and each
+    // screen capture produces a slightly different `[OTHER] ...` description
+    // of the same visual.
+    const prevStripped = stripDescriptors(prev)
+    const nextStripped = stripDescriptors(next)
+    if (nextStripped.length > 0 && prevStripped.includes(nextStripped)) {
+      continue
+    }
+
+    // Case 3: tail-of-prev overlaps head-of-next. Walk down from the longest
+    // possible overlap and cut the duplicate prefix from `next`. Floor at 40
+    // chars to avoid stripping coincidental short suffix matches like "the".
+    const minOverlap = 40
+    const maxOverlap = Math.min(prev.length, next.length)
+    let overlap = 0
+    for (let len = maxOverlap; len >= minOverlap; len--) {
+      if (prev.endsWith(next.slice(0, len))) {
+        overlap = len
+        break
+      }
+    }
+    out.push(overlap > 0 ? next.slice(overlap) : next)
+  }
+  return out.join(separator)
+}
+
 function stripOcrBoilerplate(text: string): string {
   const boilerplateLineMatchers: RegExp[] = [
     /i['’]m sorry.*(image|uploaded|visible)/i,
@@ -153,12 +214,11 @@ export async function exportBookMarkdown(
 
     const bar = createProgressBar(sorted.length)
 
-    const body = sorted
-      .map((chunk) => {
-        bar.tick(1)
-        return stripOcrBoilerplate(chunk.text)
-      })
-      .join('\n\n')
+    const cleaned = sorted.map((chunk) => {
+      bar.tick(1)
+      return { text: stripOcrBoilerplate(chunk.text) }
+    })
+    const body = joinChunksDedupingOverlap(cleaned, '\n\n')
 
     progressBarNewline()
 
@@ -246,10 +306,10 @@ ${metadata.toc
 
     const chunks = content.slice(startIndex, endIndex)
 
-    const text = chunks
-      .map((chunk) => chunk.text)
-      .join(' ')
-      .replaceAll('\n', '\n\n')
+    const text = joinChunksDedupingOverlap(chunks, ' ').replaceAll(
+      '\n',
+      '\n\n'
+    )
 
     output += `
 
