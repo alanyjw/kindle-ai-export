@@ -248,9 +248,7 @@ export async function exportBookMarkdown(
   // Detect location-mode by majority — mirrors the extract pipeline. Hybrid
   // books like reflowable text with one stray back-matter page entry are
   // dominated by location entries and should be treated as location-mode.
-  const tocPageCount = metadata.toc.filter(
-    (i) => i.page !== undefined
-  ).length
+  const tocPageCount = metadata.toc.filter((i) => i.page !== undefined).length
   const tocLocationCount = metadata.toc.filter(
     (i) => i.location !== undefined
   ).length
@@ -306,10 +304,7 @@ ${metadata.toc
 
     const chunks = content.slice(startIndex, endIndex)
 
-    const text = joinChunksDedupingOverlap(chunks, ' ').replaceAll(
-      '\n',
-      '\n\n'
-    )
+    const text = joinChunksDedupingOverlap(chunks, ' ').replaceAll('\n', '\n\n')
 
     output += `
 
