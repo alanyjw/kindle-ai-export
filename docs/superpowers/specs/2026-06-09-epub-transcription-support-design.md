@@ -1,18 +1,19 @@
-# EPUB transcription support — design (v3)
+# EPUB transcription support — design (v4)
 
 **Date:** 2026-06-09
-**Status:** Approved direction; revised after adversarial review rounds 1–2.
+**Status:** Approved direction; revised after adversarial review rounds 1–3.
 **Scope:** Add EPUB as a third input format to the transcribe pipeline, alongside Kindle screenshots and PDF.
 
 > **Revision history**
 > - **v1 → v2:** fixed `epub2.getImage` id-vs-href, `getChapter` rewriting img src, Node-20 requirement, `export-book-pdf.ts` having no arg parsing, the exporters' last-TOC-entry drop and duplicate-page slicing (trailing sentinel), and `verify`'s `unparseable-screenshot` rejection of `epub:` keys.
-> - **v2 → v3:** (a) **chunk by nav section with anchor-aware splitting**, not by spine item — v2's spine-granularity collapsed single-file EPUBs (whole book in one XHTML) into one untitled section; (b) **dropped the `linear="no"` exclusion** — `epub2` does not expose the `linear` attribute; (c) `epub2` **named import** `{ EPub }`; (d) `verify` **Section-4 chapter-coverage** `isTrailer` fix for the sentinel; (e) heading title precedence inverted to kill the every-chapter double-heading; (f) image filenames keyed on **manifest id** + zip-slip rejection; (g) intra-EPUB link flattening; (h) heading-demote pre-pass made explicit.
+> - **v2 → v3:** chunk by **nav section with anchor-aware splitting** (single-file EPUBs collapsed under spine-granularity); dropped `linear="no"` exclusion (`epub2` doesn't surface `linear`); `{ EPub }` named import; `verify` Section-4 `isTrailer` fix; heading title precedence; image-id filenames + zip-slip; intra-EPUB link flattening; heading-demote pre-pass.
+> - **v3 → v4:** (a) **nav-only EPUB3 nav.xhtml is parsed manually** via `getFileAsync` + manifest `properties="nav"` — `epub2`'s TOC parse is NCX-only; (b) **heading junk-guard** before promoting an in-text heading to a title; (c) **image filename collision** fixed (Set-disambiguation + extension from media-type); (d) concrete **anchor-split algorithm** with block-boundary promotion; (e) cross-file lead-merge constrained to same spine file; (f) merge-tiny invariant; (g) precise intra-link detection + unwrap-not-text ordering.
 
 ---
 
 ## Problem
 
-`src/transcribe-book-content.ts` has two input modes, branched on the CLI arg: **PDF mode** (`:415`, `/\.pdf$/i`, renders via `pdfjs-dist` + OCR fallback) and **Kindle screenshot mode** (the `else` branch, requires `ASIN` + PNGs in `out/${asin}/pages/`). An `.epub` falls through to the screenshot branch and fails at `assert(asin, ...)`.
+`src/transcribe-book-content.ts` has two input modes, branched on the CLI arg: **PDF mode** (`:415`, `/\.pdf$/i`, renders via `pdfjs-dist` + OCR fallback) and **Kindle screenshot mode** (the `else` branch, requires `ASIN` + PNGs in `out/${asin}/pages/`). An `.epub` falls through and fails at `assert(asin, ...)`.
 
 EPUB is a zip of XHTML/CSS that already contains clean structured text and a real table of contents, so OCR/vision is unnecessary and would reduce fidelity. This adds a dedicated EPUB branch that parses the container directly and emits the same `content.json` + `metadata.json` artifacts the exporters consume.
 
@@ -20,7 +21,7 @@ EPUB is a zip of XHTML/CSS that already contains clean structured text and a rea
 
 - Transcribe an EPUB to `content.json` with **no OpenAI/vision calls**.
 - Preserve structure as **Markdown** per chunk (headings, lists, bold/italic, blockquotes, links, tables).
-- Produce a `content.json` + `metadata.json` whose chunking and TOC render correctly through the **existing, unmodified** exporter section-walk — including **single-file EPUBs** where the nav is the only chapter structure.
+- Produce `content.json` + `metadata.json` that render correctly through the **existing, unmodified** exporter section-walk — including **single-file** and **nav-only EPUB3** books.
 - Extract embedded images to disk and reference them from the Markdown.
 - Flow a single `book.epub` path through the whole pipeline.
 
@@ -28,7 +29,7 @@ EPUB is a zip of XHTML/CSS that already contains clean structured text and a rea
 
 - No OCR/vision fallback. Fixed-layout/image-only "comic" EPUBs are out of scope this pass.
 - No DRM handling (input assumed non-encrypted, owned).
-- No re-architecting the exporters' section-walk; we adapt the **data** to its contract (only arg-parsing and one verify guard are added).
+- No re-architecting the exporters' section-walk; we adapt the **data** to its contract (only arg-parsing and one verify guard/tweak are added).
 - PDF/audio exporters are not taught to embed images.
 
 ---
@@ -41,54 +42,42 @@ The unit of work is the **nav section** (see "Section model"), not the spine ite
 
 ### Libraries (new deps)
 
-- **`epub2`** (`@3.0.2`) — zip container, OPF spine, manifest, nav/NCX TOC, raw chapter XHTML, image binaries.
-  - **Import:** must be the **named** import — `import { EPub } from 'epub2'`. A default import resolves to the base class **without** `createAsync`/`*Async` methods (verified by runtime probe).
-  - **Maintenance:** last published 2023-09; not actively maintained, but EPUB/OPF/NCX are frozen standards. Pulls `bluebird` + `adm-zip` transitively; `createAsync` returns a Bluebird thenable — always `await`.
-  - **API facts the wrapper relies on** (verified against shipped `.d.ts`/`.js` + probes):
+- **`epub2`** (`@3.0.2`) — zip container, OPF spine, manifest, NCX TOC, raw chapter XHTML, image binaries, **and raw file reads** (`getFileAsync`).
+  - **Import:** **named** — `import { EPub } from 'epub2'`. A default import lacks `createAsync`/`*Async` (runtime-verified).
+  - **Maintenance:** last published 2023-09; frozen-standard formats. Pulls `bluebird` + `adm-zip`; `createAsync` returns a Bluebird thenable — always `await`.
+  - **API facts** (verified against shipped `.d.ts`/`.js` + runtime probes):
     - `EPub.createAsync(path)` → instance; rejects on parse error.
-    - `instance.spine` / `instance.flow` — spine items as `TocElement` (`id`, `href`, `media-type`). **`linear` is NOT surfaced** — `parseSpine` never copies `itemref/@linear`. Hence the design must not depend on `linear` (see Section model / non-goals).
-    - `instance.manifest` — `{ [id]: { href, 'media-type', ... } }` → build an href→id map.
-    - `instance.metadata` — `{ creator?: string (single), title?, language?, publisher? }`. Multiple `<dc:creator>` collapse to one string (documented limitation).
-    - `instance.toc` — NCX-derived `{ title, href?, order? }`; **may be empty for nav-only EPUB3** (see TOC source).
-    - **`getChapterRawAsync(id)`** → **unmodified** XHTML. Used instead of `getChapterAsync` (which rewrites `<img src>` and strips `<head>`). Rejects on non-xhtml mime.
-    - **`getImageAsync(id)`** → `[Buffer, mimeType]`, **keyed on manifest id**, **rejects** (not null) on missing/non-image.
-- **`node-html-markdown`** — pure-Node XHTML→Markdown, **no jsdom**; headings, lists, bold/italic, blockquote, links, GFM tables, custom translators. `static translate(html, opts?, customTranslators?)` takes an HTML **string**, so we pre-mutate the DOM (image rewrite, leading-heading strip) with `node-html-parser`, serialize, then translate. Returning `{ ignore: true }` from a custom `img` translator drops an image; a custom `h1..h6` translator can read the node's level and emit a shifted/clamped prefix.
-  - **Node:** `@2` requires `engines.node >= 20`. **Bump the repo minimum to Node 20** (`package.json` + CI matrix). Fallback: pin `node-html-markdown@^1`.
-  - **Pin `node-html-parser@^6`** as a direct dep to match `node-html-markdown`'s copy and avoid a duplicate major in the tree.
+    - `instance.spine`/`instance.flow` — spine items as `TocElement` (`id`, `href`, `media-type`). **`linear` is NOT surfaced** (`parseSpine` never copies `itemref/@linear`).
+    - `instance.manifest` — `{ [id]: { href, 'media-type', properties?, ... } }`; original OPF attributes (incl. `properties`) preserved; hrefs zip-root-relative.
+    - `instance.metadata` — `{ creator?: string (single), title?, language?, publisher? }`.
+    - **`instance.toc`** — **NCX-only**. `parseTOC` runs only when the OPF `<spine>` has a `toc=` attr; for **nav-only EPUB3** `instance.toc` is `[]` and `instance.ncx` is `undefined` (runtime-verified). NCX entries carry `href` with fragment preserved (e.g. `OEBPS/book.xhtml#c1`).
+    - **`getFileAsync(id)`** → `[Buffer, mimeType]` — reads ANY manifest item's raw bytes by id. Used to read `nav.xhtml` (see Section model). (`instance.readFile`/`instance.zip.readFile` are fallbacks.)
+    - **`getChapterRawAsync(id)`** → **unmodified** XHTML (fragment ids survive). Used instead of `getChapterAsync` (which rewrites `<img src>` and strips `<head>`).
+    - **`getImageAsync(id)`** → `[Buffer, mimeType]`, keyed on manifest id, **rejects** (not null) on missing/non-image.
+- **`node-html-markdown`** — pure-Node XHTML→Markdown, **no jsdom**; headings/lists/bold/italic/blockquote/links/GFM-tables + custom translators. `static translate(htmlString, opts?, customTranslators?)`. Returning `{ ignore: true }` from a custom `img` translator drops an image; a custom `h1..h6` translator reads the node level and emits a shifted/clamped prefix.
+  - **Node:** `@2` needs `engines.node >= 20`. **Bump repo minimum to Node 20** (`package.json` + CI). Fallback: pin `@^1`.
+  - **`node-html-parser@^6`** as a direct dep (matches nhm's copy; used for image pre-scan, leading-heading strip, anchor splitting). It has **no document-order range primitive** — the split algorithm below works on block-level siblings.
 
 ### `src/epub.ts` interface (sketch)
 
 ```ts
-export interface EpubSpineItem {
-  id: string          // OPF idref
-  href: string        // zip path; base dir for resolving relative hrefs
-  index: number       // 0-based spine position
-}
-
+export interface EpubSpineItem { id: string; href: string; index: number }
 export interface EpubNavEntry {
   title: string
-  fileHref: string    // target spine file (fragment stripped)
-  fragment?: string   // element id within the file, if the nav target had one
-  order: number       // document order across the flattened nav tree
+  fileHref: string    // target spine file (fragment stripped, zip-root-relative)
+  fragment?: string   // element id within the file, if present
+  order: number       // assigned by the wrapper = index in the flattened walk (NOT epub2's unreliable `order`)
 }
-
-export interface EpubMetadata {
-  title: string
-  authors: string[]   // epub2 single creator → [creator] or []
-  language?: string
-  publisher?: string
-}
+export interface EpubMetadata { title: string; authors: string[]; language?: string; publisher?: string }
 
 export async function openEpub(epubPath: string): Promise<void>
 export async function getEpubMetadata(epubPath: string): Promise<EpubMetadata>
 export async function getEpubSpine(epubPath: string): Promise<EpubSpineItem[]>
-export async function getEpubNav(epubPath: string): Promise<EpubNavEntry[]>   // NCX or nav.xhtml, flattened depth-first
+export async function getEpubNav(epubPath: string): Promise<EpubNavEntry[]>   // NCX or manually-parsed nav.xhtml
 export async function getEpubChapterHtml(epubPath: string, id: string): Promise<string>  // getChapterRawAsync
-// resolvedHref = zip-root-relative path already normalized + zip-slip-checked by caller.
-// Wrapper owns href→id map, adapts [Buffer,string] tuple, catches rejection → null.
 export async function getEpubImage(
   epubPath: string,
-  resolvedHref: string
+  resolvedHref: string   // zip-root-relative, normalized + zip-slip-checked by caller
 ): Promise<{ data: Buffer; mediaType: string } | null>
 export async function closeEpub(epubPath: string): Promise<void>
 ```
@@ -106,30 +95,41 @@ export function sectionHtmlToMarkdown(
 ): string
 ```
 
+### Obtaining nav entries (`getEpubNav`)
+
+1. **NCX present** (`instance.toc.length > 0`): use it; split each `href` on `#` → `fileHref` + `fragment`.
+2. **Otherwise (nav-only EPUB3):** find the manifest item whose `properties` (whitespace-split) contains `nav`; read its bytes with `getFileAsync(navId)`; parse with `node-html-parser`; select `<nav epub:type="toc">` (fall back to the first `<nav>`); flatten its `<ol><li><a href>` tree **depth-first**; for each `<a>`, resolve `href` against `dirname(navItem.href)`, zip-root-normalize, split on `#`. `order` = position in this walk.
+3. Neither available → empty nav (every spine item becomes an orphan; see Section model).
+
 ---
 
-## Section model (resolves the single-file-EPUB CRITICAL)
+## Section model
 
-The exporter section-walk (`export-book-markdown.ts:290-316`, `export-book-pdf.ts:68-101`) requires, as **data**: a `content[]` ordered by a unique ascending `page`, and a `toc[]` whose `i`-th entry's `page` selects the `i`-th chunk, with a final terminator entry (it loops `i < toc.length - 1`). We satisfy this by producing an ordered list of **sections**, one chunk + one TOC entry each.
+The exporter section-walk (`export-book-markdown.ts:290-316`, `export-book-pdf.ts:68-101`) requires, as **data**: `content[]` ordered by unique ascending `page`; `toc[]` whose `i`-th entry's `page` selects the `i`-th chunk; and a final terminator (it loops `i < toc.length - 1`). We satisfy this with an ordered list of **sections**, one chunk + one TOC entry each.
+
+**Block-boundary helper.** A *split point* for a `fragment` is the **nearest block-level ancestor of the anchored element that is a direct child of the section container** (`<body>` or the chapter root). Block-level = `p,div,section,article,h1..h6,ul,ol,li,blockquote,table,figure,pre,hr`. This converts a possibly-inline, deeply-nested anchor (`<span id>` mid-paragraph) into a top-level sibling boundary, so segments are **whole-block sibling slices** (which node-html-parser can do via `body.childNodes`), never half-paragraphs.
 
 **Deriving sections (reading order):**
 
-1. Build `navEntries` from NCX, else EPUB3 `nav.xhtml` (fragments preserved), flattened depth-first in document order.
-2. Walk spine items in order. For each spine item `S` (raw XHTML via `getChapterRawAsync`, parsed with `node-html-parser`):
-   - `hits` = nav entries whose `fileHref === S.href`, ordered by the document position of their `fragment` element within `S` (a no-fragment/topmost hit sorts first).
-   - **≥1 fragment-bearing hits →** split `S`'s DOM at those fragment-element boundaries into segments (a segment runs from one anchored element up to, but excluding, the next). Content **before the first anchor** is the *lead segment*.
-     - Each anchored segment → one **Section**; title = the segment's in-text leading heading, else the hit's nav title, else `Section {n}`.
-     - Lead segment: if it has a leading heading → its own Section; else if it has substantive text → appended to the **previous** Section's body (continuation); else dropped.
-     - A `fragment` with no matching element id is treated as top-of-file.
-   - **Exactly one hit, no usable fragment →** `S` is one Section; title = in-text leading heading, else nav title, else `Section {n}`.
-   - **No hits (orphan: cover, copyright, footnote popup, back-matter) →**
-     - If `S` has a leading heading → its own Section (title = that heading).
-     - Else (**merge-tiny rule**, prevents per-paragraph-file explosion and stray `Section N` noise) append `S`'s body to the **previous** Section; if there is no previous Section, `S` becomes Section 1 titled from metadata title or `Section 1`.
-3. Result: ordered `Section[]`. Each → `ContentChunk` (`page = ordinal`, `index = ordinal-1`) + `TocItem` (`page = ordinal`). Append a **trailing sentinel** `TocItem` (`page` undefined, `total` = section count) so the exporter's `toc.length - 1` loop renders the real last section (its `nextPos` is undefined → `endIndex = content.length`). The sentinel is filtered out of the printed TOC (only defined-position entries are listed, `export-book-markdown.ts:280-286`).
+1. `navEntries = getEpubNav(...)`.
+2. For each spine item `S` in order (raw XHTML via `getChapterRawAsync`, parsed with `node-html-parser`):
+   - `hits` = nav entries with `fileHref === S.href`, ordered by the document position of each hit's split point (a no-fragment / top-of-file hit sorts first). **Duplicate or missing fragments:** a fragment whose element id is absent → split point = top-of-file; two hits resolving to the **same** split point are de-duplicated to the first (its title wins; the dropped title is logged — a known, warned limitation).
+   - **≥1 fragment-bearing hits →** slice `S`'s top-level block children at the hits' split points. Each anchored segment → one **Section** (title via the rules below). The **lead segment** (blocks before the first split point) stays **within `S`**: if it has a leading heading → its own Section; else if it has substantive text → prepended to the **first anchored Section of `S`** (never merged across spine files); else dropped.
+   - **Exactly one hit (no usable fragment) →** `S` is one Section.
+   - **No hits (orphan) →** if `S` has a leading heading or a nav title → its own Section; **else (merge-tiny)** append `S`'s body to the **previous Section *only if that section came from the same spine file*** — otherwise `S` starts its own `Section {n}`. (If `S` is first, it's Section 1.) Merge-tiny prevents per-paragraph-file `Section N` noise without bleeding content across chapter files.
+   - **Invariant:** every nav entry yields **exactly one** Section whose title defaults to that nav entry's title (unless a valid in-text heading overrides it). Nav-titled content is never merged away.
+3. Each Section → `ContentChunk` (`page = ordinal`, `index = ordinal-1`) + `TocItem` (`page = ordinal`). Append a **trailing sentinel** `TocItem` (`page` undefined, `total` = section count) so the `toc.length-1` loop renders the real last section (its `nextPos` is undefined → `endIndex = content.length`). The sentinel is filtered from the printed TOC (only defined-position entries are listed, `:280-286`).
 
-This makes a single-file 30-chapter EPUB produce 30 sections, a one-file-per-chapter EPUB produce one section per file, and bounds the pathological one-file-per-paragraph case via merge-tiny. **Documented limitation:** sub-section nesting depth is flattened (one level of sections); two sections that resolve to the *same* fragment are de-duplicated to the first.
+**Section title selection** (resolves the junk-heading CRITICAL):
 
-**Idempotency key:** `screenshot = epub:<sectionKey>` where `sectionKey = <spineId>` or `<spineId>#<fragment>` for split sections — stable across re-runs, unique per section, mirrors `pdf:<path>#page=N` (`transcribe-book-content.ts:528`). Reuses the existing `processedScreenshots` skip (`:479-484`). **`FORCE` is not implemented in transcribe** (only in extract/audio); not claimed here — re-transcribe means deleting `content.json`.
+- Candidate = the section's **in-text leading heading** (first `<h1>`–`<h6>` in document order). Promote it **only if** its normalized text content (tags/images/entities stripped, trimmed) **contains a letter (`/\p{L}/u`) and has length ≥ 2.** Otherwise reject it (it's a drop-cap, part-number "I", image-only, or empty heading).
+- Else the **nav title** for this section.
+- Else `Section {n}`.
+- When (and only when) the in-text heading was promoted, set `stripLeadingHeading` so the body doesn't repeat it.
+
+**Idempotency key:** `screenshot = epub:<sectionKey>`, `sectionKey = <spineId>` or `<spineId>#<fragment>` for split sections — stable, unique, mirrors `pdf:<path>#page=N`. Reuses `processedScreenshots` skip (`:479-484`). **`FORCE` is not implemented in transcribe**; re-transcribe means deleting `content.json`.
+
+**Documented limitation:** nav hierarchy flattened to one section level; out-of-document-order nav trees render in physical reading order (printed TOC and content stay mutually consistent because both derive from the same `toc[]`); duplicate-fragment nav entries drop the later title (warned).
 
 ---
 
@@ -141,46 +141,47 @@ This makes a single-file 30-chapter EPUB produce 30 sections, a one-file-per-cha
 |---|---|
 | `index` | 0-based section ordinal |
 | `page` | ordinal (1-based, contiguous, unique) |
-| `text` | section Markdown, or `[BLANK_PAGE]` only when the section Markdown (including image refs) is empty |
+| `text` | section Markdown, or `[BLANK_PAGE]` only when the section Markdown (incl. image refs) is empty |
 | `screenshot` | `epub:<sectionKey>` |
 
 ### metadata.json (`BookMetadata`)
 
 - `meta.title` = first `dc:title`; `meta.authorList` = `creator ? [creator] : []`; `meta.language`/`publisher` when present.
-- `meta` has **16 required fields** (`types.ts:22-43`); built from a concrete default factory (exporters read only `title`+`authorList`, but we populate the full shape): empty strings for `ACR/asin/bookSize/bookType/cover/publisher/refEmId/releaseDate/version`, `sample:false`, `positions:{cover:0,srl:0,toc:0}`, `startPosition:0`, `endPosition:` section count, plus `title/authorList/language`.
+- `meta` has **16 required fields** (`types.ts:22-43`); concrete default factory (exporters read only `title`+`authorList`): empty strings for `ACR/asin/bookSize/bookType/cover/publisher/refEmId/releaseDate/version`, `sample:false`, `positions:{cover:0,srl:0,toc:0}`, `startPosition:0`, `endPosition:` section count, plus `title/authorList/language`.
 - `pages` — one `PageChunk{index,page,total,screenshot}` per section; `total` = section count.
-- `toc` — per-section `TocItem{title,page,total}` (`location` undefined → page mode, `export-book-markdown.ts:251-257`) + trailing sentinel `{title:'',page:undefined,total}`.
+- `toc` — per-section `TocItem{title,page,total}` (`location` undefined → page mode, `:251-257`) + trailing sentinel `{title:'',page:undefined,total}`.
 
-**Fields each exporter reads** (verified): markdown → `meta.title`, `meta.authorList`, `toc[].title`, `toc[].page`, `toc[].location`; pdf → `meta.title`, `meta.authorList`, `toc[].title`, `toc[].page`. Defaults above are therefore safe.
-
----
-
-## Heading reconciliation (resolves the every-chapter double-heading)
-
-The exporter injects `## <toc title>` per section. To avoid a duplicate when the section body *also* opens with that title, the promoted title is **always stripped from the body**:
-
-1. **Title precedence (per section):** in-text **leading heading** → else nav title → else `Section {n}`. The in-text heading wins so that, for a novel where nav says "Chapter 1" but the page reads "The Funeral", the rendered section title and TOC link are **"The Funeral"** and the body no longer repeats it. (Trade-off: TOC-link text may differ from the nav label — cosmetic, far better than a duplicate heading on every chapter.) "Leading heading" = the first `<h1>`–`<h6>` in document order within the section.
-2. **Strip:** when `stripLeadingHeading` is set (i.e. the title came from the in-text leading heading), remove that heading node before conversion.
-3. **Demote with clamp (needs a pre-pass):** the `node-html-parser` pre-scan computes the section's **minimum remaining heading level** `m`; the custom `h1..h6` translator emits level `min(6, level + (3 - m))` so the shallowest remaining heading becomes `h3` (nested under the exporter's `h2`). Relative depth is preserved **up to h6**; deeper levels are clamped and may merge (rare; acknowledged, not "lossless").
+**Fields each exporter reads** (verified): markdown → `meta.title`, `meta.authorList`, `toc[].title`, `toc[].page`, `toc[].location`; pdf → `meta.title`, `meta.authorList`, `toc[].title`, `toc[].page`. Defaults are safe.
 
 ---
 
-## Image extraction (resolves zip-slip + collisions)
+## Heading reconciliation
+
+The exporter injects `## <toc title>` per section. To avoid a duplicate, the promoted title is **always stripped from the body**:
+
+1. **Title precedence** — as in Section model (in-text leading heading *passing the junk-guard* → nav title → `Section {n}`).
+2. **Strip** — when `stripLeadingHeading` is set, remove the promoted heading node before conversion.
+3. **Demote with clamp (needs the pre-pass):** the `node-html-parser` pre-scan computes the section's **minimum remaining heading level** `m`; the custom `h1..h6` translator emits `min(6, level + (3 - m))` so the shallowest remaining heading becomes `h3` (under the exporter's `h2`). Relative depth preserved **up to h6**; deeper levels clamp/merge (rare; acknowledged).
+
+---
+
+## Image extraction
 
 - Raw XHTML via `getChapterRawAsync`; pre-scan `<img>` with `node-html-parser`. The `img` translator checks the `src` scheme **before** calling `resolveImage`:
-  - **`data:` URI** → passed through untouched (not extracted). **SVG-wrapped `<image xlink:href>` and `srcset`** are out of scope v1 (documented); text unaffected.
-  - Otherwise: resolve `src` against `dirname(spineItem.href)`, normalize `.`/`..` to a **zip-root-relative** path. **Reject (drop image + warn) any path that escapes the zip root** (zip-slip guard). Look up the normalized href in the manifest (href→id) → `getEpubImage`.
-- **Filename = manifest `id`** (unique per OPF spec) + original extension, sanitized (`sanitizeDirname`). Written to `out/<book>/images/<id>.<ext>`; the same name is used in the rewritten Markdown `src` (`images/<id>.<ext>`), so write-path and reference always agree and **cannot collide** (manifest ids are unique). Before writing, assert the resolved target path is contained within `out/<book>/images/`.
-- On miss/unreadable/non-image/rejection → `resolveImage` returns `null`, `<img>` dropped, text kept, warning logged. Never abort the section.
-- **Cover/image-only/text-light sections:** convert first (image refs included); mark `[BLANK_PAGE]` **only if the result is empty**, so a cover keeps its image reference.
+  - **`data:` URI** → passed through untouched. **SVG-wrapped `<image xlink:href>`, `srcset`** out of scope v1 (documented); text unaffected.
+  - Otherwise: resolve `src` against `dirname(spineItem.href)`, normalize `.`/`..` to **zip-root-relative**; **reject (drop + warn) any path escaping the zip root** (zip-slip). Manifest lookup (href→id) → `getEpubImage`.
+- **Filename:** `sanitizeDirname(manifest id)` + extension **derived from the media-type** (`image/jpeg`→`.jpg`, `image/png`→`.png`, …; fall back to the href extension only when media-type is generic/unknown). Manifest ids are unique, but `sanitizeDirname` is lossy (strips chars, truncates to 128), so **disambiguate against a `Set` of already-emitted names** (append `-2`, `-3`, … deterministically by first-seen order). The chosen name is used for **both** the on-disk file (`out/<book>/images/<name>`) and the Markdown `src` (`images/<name>`), so they always agree. Before writing, assert the resolved target is contained within `out/<book>/images/`.
+- On miss/unreadable/non-image/rejection → `resolveImage` returns `null`, `<img>` dropped, text kept, warn. Never abort the section.
+- **Cover/image-only/text-light sections:** convert first (image refs included); `[BLANK_PAGE]` only if the result is empty.
 
 ---
 
 ## Links & encoding contract
 
-- **Intra-EPUB links** (`<a href>` targeting a spine/manifest file, with/without fragment): **flattened to plain text** (link text kept, `href` dropped). This avoids dead relative links in the single combined Markdown (footnote markers, cross-chapter refs). **External** `http(s)`/`mailto` links are preserved. (Footnote *content* itself is not lost: orphan footnote spine items become their own sections per the Section model, since `linear` can't be read to exclude them.)
-- Bytes read UTF-8; HTML entities decoded; `&nbsp;`/`&#160;` → space; `&shy;` removed; `<pre>` → fenced code; insignificant inter-tag whitespace collapsed (node-html-markdown default).
-- EPUB chunks are 1:1 with sections (no multi-screen overlap), so `joinChunksDedupingOverlap` (`export-book-markdown.ts:26`) is effectively a no-op for EPUB output.
+- **Link handling order:** image rewrite runs first/independently; link handling then **unwraps the `<a>` element, keeping its child nodes** (so `<a href><img></a>` keeps the image, and an anchor wrapping text keeps the text) — it does **not** text-extract.
+- **Which links are unwrapped (intra-EPUB):** parse the `href`. Preserve if the scheme ∈ {`http`,`https`,`mailto`,`tel`}. Otherwise (bare `#fragment`; relative path; `epub:`; or a path that resolves to a manifest/spine file) → **unwrap** (drop the dead-in-combined-output link, keep children). Unknown/other schemes → unwrap (safe default; no dead links in the single combined Markdown).
+- Bytes read UTF-8; HTML entities decoded; `&nbsp;`/`&#160;` → space; `&shy;` removed; `<pre>` → fenced code; insignificant inter-tag whitespace collapsed.
+- EPUB chunks are 1:1 with sections (no multi-screen overlap), so `joinChunksDedupingOverlap` (`:26`) is effectively a no-op for EPUB output.
 
 ---
 
@@ -190,16 +191,16 @@ The exporter injects `## <toc title>` per section. To avoid a duplicate when the
 
 - `transcribe-book-content.ts` — `isEpubMode = /\.epub$/i.test(arg)`; `out/<base>` via `sanitizeDirname(path.basename(epubPath, path.extname(epubPath)))` (as PDF branch, `:424`).
 - `export-book-markdown.ts` — extend the existing `.pdf` arg test (`:336-356`) to accept `.epub`; Kindle mode renders automatically.
-- `export-book-pdf.ts` — **add `main()` arg-parsing** (none today; `:12-16` hardwired to `ASIN`), mirroring the markdown exporter: `.pdf`/`.epub` → `out/<basename>`; else `path.resolve(arg)`; else `ASIN`.
+- `export-book-pdf.ts` — **add `main()` arg-parsing** (none today; `:12-16` hardwired to `ASIN`), mirroring markdown: `.pdf`/`.epub` → `out/<basename>`; else `path.resolve(arg)`; else `ASIN`. (PDF export stays metadata-only — no content-only fallback — which is fine since EPUB always writes `metadata.json`.)
 
 ---
 
 ## verify-book-content compatibility (two changes)
 
-1. **`epub:` keys** — `parseScreenshotFilename` (utils.ts:69, `\d+-\d+\.png` only) and `parsePdfRef` both return null for `epub:<…>`, so every EPUB chunk would be flagged `unparseable-screenshot` (and the CLI sets `exitCode=1`). **Add `EPUB_REF_RE = /^epub:.+$/`** as a third recognizer in that branch (`verify-book-content.ts:173-197`), parallel to `parsePdfRef`, so EPUB keys are recognized and skipped.
-2. **Section-4 chapter-coverage `isTrailer`** (`:391-421`) — runs whenever `metadata.json` exists (always, for EPUB). Interior sections span exactly 1 page so the `nextPage - item.page <= 1` guard (`:408`) skips them; only the **last** section is evaluated. The current `isTrailer = !finite(nextPage) && i === toc.length - 1` (`:399`) is defeated by our sentinel (real last section sits at `toc.length - 2`), so a `[BLANK_PAGE]` final section would raise `empty-chapter`. **Change the index check to the last entry with a numeric `page`** (`i === lastIndexWithNumericPage(toc)`): identical behavior for Kindle/PDF (their last entry has a page), correct for the EPUB sentinel.
+1. **`epub:` keys** — `parseScreenshotFilename` (utils.ts:69, `\d+-\d+\.png` only) and `parsePdfRef` both return null for `epub:<…>`, so every EPUB chunk would be flagged `unparseable-screenshot` (CLI sets `exitCode=1`). **Add `EPUB_REF_RE = /^epub:.+$/`** as a third recognizer in that branch (`:173-197`). (`.+` matches keys with `#`, verified.)
+2. **Section-4 chapter-coverage `isTrailer`** (`:391-421`, runs whenever `metadata.json` exists). Section 4 evaluates only numeric-`page` entries (`:393`); interior 1-page sections are skipped by the `nextPage - item.page <= 1` guard (`:408`), so only the **last** section is checked. The current `isTrailer = !finite(nextPage) && i === toc.length - 1` (`:399`) is defeated by our sentinel (the real last section sits at `toc.length-2`), so a `[BLANK_PAGE]` final section would raise `empty-chapter`. **Change the index check to the last entry with a numeric `page`** (`i === lastIndexWithNumericPage(toc)`). This is behavior-preserving for non-EPUB: Section 4 only ever evaluates numeric-page entries, so where location-only entries trail (some Kindle back-matter) the change merely suppresses a trailer false-positive the existing comment already wants gone — it never introduces one or hides a real multi-page blank chapter. For PDF it's inert (PDF writes no `metadata.json`).
 
-Other verify checks are inert for EPUB: `duplicate-screenshot` (keys unique), orphan/missing-screenshot (gated on PNGs in `pages/`, none exist), PDF coverage (`parsePdfRef` null). The blank-marker check already treats `[BLANK_PAGE]` correctly.
+Other verify checks are inert for EPUB: `duplicate-screenshot` (unique keys), orphan/missing-screenshot (gated on PNGs in `pages/`), PDF coverage (`parsePdfRef` null).
 
 ---
 
@@ -208,9 +209,9 @@ Other verify checks are inert for EPUB: `duplicate-screenshot` (keys unique), or
 - Malformed/missing OPF spine, unreadable zip → fail fast with a clear message (mirrors `assert(numPages > 0)`).
 - Empty section Markdown → `[BLANK_PAGE]`.
 - Image miss/unreadable/zip-slip/non-image → drop image, keep text, warn.
-- No NCX **and** no nav → every spine item is an orphan → merge-tiny yields one section per heading-bearing file (title from leading heading or `Section N`); `metadata.json` still emitted (never content-only mode, whose `formatPdfTextToMarkdown` would mangle real Markdown).
-- TOC anchor-slug collisions for duplicate/empty titles — pre-existing exporter behavior (`title.toLowerCase().replace(/[^\da-z]+/g,'-')`, `:284`); **documented known limitation**.
-- **Sentinel coupling caveat:** the trailing sentinel is load-bearing; a future exporter refactor that "fixes" the `toc.length - 1` off-by-one would make the sentinel render as an empty section. Noted for whoever touches the section-walk.
+- No NCX **and** no nav → every spine item is an orphan → merge-tiny yields one section per heading-bearing file; `metadata.json` still emitted (never content-only mode, whose `formatPdfTextToMarkdown` would mangle real Markdown).
+- TOC anchor-slug collisions for duplicate/empty titles — pre-existing exporter behavior (`:284`); the junk-guard above prevents v3-induced empty-title collisions, but genuinely duplicate real titles remain a **documented known limitation**.
+- **Sentinel coupling caveat:** the trailing sentinel is load-bearing; a future exporter refactor that "fixes" the `toc.length-1` off-by-one would make the sentinel render as an empty section.
 
 ---
 
@@ -218,10 +219,13 @@ Other verify checks are inert for EPUB: `duplicate-screenshot` (keys unique), or
 
 Target ≥80% on `src/epub.ts` + `sectionHtmlToMarkdown`.
 
-- **Fixture:** commit EPUB **source files** under `src/__tests__/fixtures/epub-src/` exercising the hard cases: **(a) a single XHTML file with 3 chapters delineated by `#frag` nav anchors** (the C1 case), **(b) one orphan front-matter file with no nav entry**, **(c) one referenced image**, **(d) an intra-book footnote link**, **(e) a text-rich final section** (so Section-4 stays green). A helper `buildFixtureEpub()` zips them at runtime with **`jszip`** (devDep), adding `mimetype` **first and STORED** (`{compression:'STORE'}`) per EPUB OCF.
-- **`src/epub.ts` unit tests:** spine order; nav flattening + fragment parse; **anchor-aware section split** (the single-file case → 3 sections); orphan/merge-tiny behavior; trailing sentinel; href→id image resolution against the spine dir; **zip-slip rejection**; single-creator → `authorList`.
-- **`sectionHtmlToMarkdown` unit tests:** heading/list/emphasis/blockquote/table preservation; leading-title promotion+strip (no duplicate); demote-to-h3 via min-level pre-pass + h6 clamp; image rewrite + drop-on-null + **data-URI pass-through**; intra-EPUB link flattening vs external-link retention; `&nbsp;`/`&shy;` normalization.
-- **Integration test:** run the EPUB branch end-to-end on the fixture; assert `content.json` (section count, ordering, `epub:` keys, cover keeps image ref not `[BLANK_PAGE]`) and `metadata.json` (`toc` = sections + 1 sentinel, `pages`, title/authors). Then run `verifyBookContent` and assert **zero `unparseable-screenshot` AND zero `empty-chapter`** issues.
+- **Fixtures (two committed EPUBs, sources under `src/__tests__/fixtures/`):**
+  - **(A) single XHTML file, 3 chapters via `#frag` nav anchors, with an NCX** — exercises anchor splitting (incl. one anchor on a `<span>` mid-paragraph to test block-boundary promotion), an orphan front-matter file with no nav entry, one referenced image, an intra-book footnote link, and a **text-rich final section** (keeps Section-4 green).
+  - **(B) nav-only EPUB3, NO NCX, NO `<spine toc>`** — asserts `epub2.toc` is empty and the wrapper's manual `nav.xhtml` parse (`properties="nav"` + `getFileAsync`) yields the right sections.
+  - Helper `buildFixtureEpub()` zips sources at runtime with **`jszip`** (devDep), `mimetype` **first and STORED**.
+- **`src/epub.ts` unit tests:** spine order; NCX vs nav-only nav extraction; anchor-aware split incl. mid-paragraph `<span>` (block promotion) and missing/duplicate fragments; orphan/merge-tiny incl. the same-spine-file constraint and the nav-titled-short-file invariant; trailing sentinel; href→id image resolution + **zip-slip rejection** + sanitize-collision disambiguation + media-type extension; single-creator → `authorList`.
+- **`sectionHtmlToMarkdown` unit tests:** heading/list/emphasis/blockquote/table preservation; **junk-guard** (drop-cap/part-number/image-only/empty heading → nav title fallback); leading-title promote+strip (no duplicate); demote-to-h3 + h6 clamp; image rewrite + drop-on-null + **data-URI pass-through**; `<a><img></a>` keeps image; intra-EPUB link unwrap vs external-link retention; `&nbsp;`/`&shy;` normalization.
+- **Integration test (both fixtures):** run the EPUB branch end-to-end; assert `content.json` (section count, ordering, `epub:` keys, cover keeps image ref not `[BLANK_PAGE]`) and `metadata.json` (`toc` = sections + 1 sentinel, `pages`, title/authors). Then run `verifyBookContent` and assert **zero `unparseable-screenshot` AND zero `empty-chapter`** issues.
 
 ---
 
@@ -229,13 +233,13 @@ Target ≥80% on `src/epub.ts` + `sectionHtmlToMarkdown`.
 
 | File | Change |
 |---|---|
-| `src/epub.ts` | **new** — wrapper (`{ EPub }` named import, `getChapterRawAsync`, nav flatten, href→id image map, zip-slip guard) + section derivation helpers + `sectionHtmlToMarkdown` |
+| `src/epub.ts` | **new** — wrapper (`{ EPub }`, `getChapterRawAsync`, NCX + manual nav.xhtml via `getFileAsync`/`properties="nav"`, href→id image map, zip-slip + sanitize-collision guards) + section derivation + `sectionHtmlToMarkdown` |
 | `src/transcribe-book-content.ts` | new EPUB branch in `main()`; `.epub` detection |
 | `src/export-book-markdown.ts` | extend arg detection to `.epub` |
 | `src/export-book-pdf.ts` | **add `main()` arg-parsing** (none today) |
 | `src/verify-book-content.ts` | add `EPUB_REF_RE`; fix `isTrailer` to last numeric-page entry |
 | `src/__tests__/epub.test.ts` | **new** — unit + integration tests |
-| `src/__tests__/fixtures/epub-src/**` | **new** — fixture sources (single-file + orphan + image + footnote) |
+| `src/__tests__/fixtures/**` | **new** — fixture sources (single-file+NCX, nav-only EPUB3) |
 | `src/__tests__/helpers/build-fixture-epub.ts` | **new** — `jszip` fixture zipper (mimetype first/STORED) |
 | `package.json` | add `epub2`, `node-html-markdown`, `node-html-parser@^6` deps + `jszip` devDep; bump `engines.node` to `>=20` |
 | `.github/workflows/*` | bump CI Node matrix to 20 |
@@ -243,9 +247,10 @@ Target ≥80% on `src/epub.ts` + `sectionHtmlToMarkdown`.
 
 ## Known limitations (intended, documented)
 
-- Nav hierarchy flattened to one section level; duplicate-fragment nav entries de-duplicated.
+- Nav hierarchy flattened to one section level; duplicate-fragment nav entries drop the later title (warned).
+- Out-of-document-order nav trees render in physical reading order.
 - Multi-author EPUBs collapse to a single `creator` string (epub2).
 - SVG-wrapped/`srcset`/data-URI images not extracted in v1 (data-URIs passed through).
-- Intra-EPUB hyperlinks flattened to text (footnote *content* preserved as orphan sections).
-- TOC anchor-slug collisions for duplicate/empty titles (pre-existing exporter behavior).
-- Section title may differ from the nav label when an in-text heading is present (intentional, avoids double headings).
+- Intra-EPUB hyperlinks unwrapped to their children (footnote *content* preserved as orphan sections).
+- Genuinely duplicate/empty real TOC titles can collide in exporter anchor slugs (pre-existing exporter behavior).
+- Section title may differ from the nav label when a valid in-text heading is present (intentional, avoids double headings).
