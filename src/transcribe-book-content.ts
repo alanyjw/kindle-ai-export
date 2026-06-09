@@ -7,6 +7,7 @@ import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
 import type { ContentChunk } from './types'
+import { extractEpub } from './epub-transcribe'
 import { isBlankPageFromPng } from './image'
 import {
   closePdfRenderer,
@@ -413,6 +414,44 @@ async function ocrImageToText(
 async function main() {
   const arg = process.argv[2]
   const isPdfMode = Boolean(arg && /\.pdf$/i.test(arg))
+  const isEpubMode = Boolean(arg && /\.epub$/i.test(arg))
+
+  // EPUB: parse the container directly (no OpenAI/vision). Emits both
+  // content.json and metadata.json so the existing exporters render unchanged.
+  if (isEpubMode) {
+    const epubPath = path.resolve(arg!)
+    const base = sanitizeDirname(
+      path.basename(epubPath, path.extname(epubPath))
+    )
+    const outDir = path.join('out', base)
+    await fs.mkdir(outDir, { recursive: true })
+    await setupTimestampedLogger(outDir)
+
+    const blankMarker = getEnv('TRANSCRIBE_BLANK_MARKER') || '[BLANK_PAGE]'
+    const { content, metadata } = await extractEpub(
+      epubPath,
+      outDir,
+      blankMarker
+    )
+
+    await fs.writeFile(
+      path.join(outDir, 'content.json'),
+      JSON.stringify(content, null, 2)
+    )
+    await fs.writeFile(
+      path.join(outDir, 'metadata.json'),
+      JSON.stringify(metadata, null, 2)
+    )
+    console.warn(`✅ Transcribed ${content.length} EPUB section(s) → ${outDir}`)
+
+    const verifyResult = await verifyBookContent({ outDir, repair: false })
+    if (verifyResult.issues.length > 0) {
+      console.warn(
+        `Verification found ${verifyResult.issues.length} issue(s); see warnings above.`
+      )
+    }
+    return
+  }
 
   const pdfPath = isPdfMode ? path.resolve(arg!) : undefined
 

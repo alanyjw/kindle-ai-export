@@ -340,10 +340,10 @@ async function main() {
   let pdfBasename: string | undefined
 
   if (arg) {
-    if (/\.pdf$/i.test(arg)) {
-      const pdfPath = path.resolve(arg)
+    if (/\.(?:pdf|epub)$/i.test(arg)) {
+      const filePath = path.resolve(arg)
       pdfBasename = sanitizeDirname(
-        path.basename(pdfPath, path.extname(pdfPath))
+        path.basename(filePath, path.extname(filePath))
       )
       outDir = path.join('out', pdfBasename)
     } else {

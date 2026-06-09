@@ -7,13 +7,30 @@ import path from 'node:path'
 import PDFDocument from 'pdfkit'
 
 import type { BookMetadata, ContentChunk } from './types'
-import { assert, getEnv, resolveOutDir } from './utils'
+import { assert, getEnv, resolveOutDir, sanitizeDirname } from './utils'
 
-async function main() {
+// Resolves the output directory from an optional CLI arg (a .pdf/.epub path or
+// an out/ dir) or, when absent, from the ASIN env. PDF export requires
+// metadata.json, which the EPUB and Kindle pipelines both produce.
+async function resolveOutDirArg(): Promise<string> {
+  const arg = process.argv[2]
+  if (arg) {
+    if (/\.(?:pdf|epub)$/i.test(arg)) {
+      const filePath = path.resolve(arg)
+      const base = sanitizeDirname(
+        path.basename(filePath, path.extname(filePath))
+      )
+      return path.join('out', base)
+    }
+    return path.resolve(arg)
+  }
   const asin = getEnv('ASIN')
   assert(asin, 'ASIN is required')
+  return resolveOutDir(asin)
+}
 
-  const outDir = await resolveOutDir(asin)
+async function main() {
+  const outDir = await resolveOutDirArg()
 
   const content = JSON.parse(
     await fsp.readFile(path.join(outDir, 'content.json'), 'utf8')

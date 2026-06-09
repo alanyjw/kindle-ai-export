@@ -76,6 +76,10 @@ export type VerificationIssue =
 const BLANK_MARKER_RE = /^\s*\[BLANK_PAGE]\s*$/
 const PDF_REF_RE = /^pdf:(.+)#page=(\d+)$/
 
+// EPUB chunks key on `epub:<spineId>[#<fragment>]` (not a page-encoded ref);
+// recognized here so they aren't flagged as unparseable screenshots.
+const EPUB_REF_RE = /^epub:.+$/
+
 function parsePdfRef(
   screenshot: string
 ): { source: string; page: number } | null {
@@ -189,7 +193,7 @@ export async function verifyBookContent(
             repairedCount++
           }
         }
-      } else {
+      } else if (!EPUB_REF_RE.test(chunk.screenshot)) {
         issues.push({
           kind: 'unparseable-screenshot',
           screenshot: chunk.screenshot
@@ -388,6 +392,14 @@ export async function verifyBookContent(
       await fs.readFile(metadataPath, 'utf8')
     ) as BookMetadata
     const toc = metadata.toc ?? []
+    // Last TOC entry that carries a numeric page. For Kindle/PDF this is the
+    // array's last entry; for EPUB it's the entry before the page-less trailing
+    // sentinel. Anchoring the trailer skip here (rather than toc.length-1) keeps
+    // the sentinel from making the real last section look like a non-trailer.
+    let lastIndexWithNumericPage = -1
+    for (let i = 0; i < toc.length; i++) {
+      if (typeof toc[i]!.page === 'number') lastIndexWithNumericPage = i
+    }
     for (let i = 0; i < toc.length; i++) {
       const item = toc[i]!
       if (typeof item.page !== 'number') continue
@@ -396,7 +408,8 @@ export async function verifyBookContent(
       // Index / Acknowledgments). These are usually 1–2 pages, often with
       // photos or sparse text that OCR returns as [BLANK_PAGE]; flagging
       // them creates noise without surfacing real bugs.
-      const isTrailer = !Number.isFinite(nextPage) && i === toc.length - 1
+      const isTrailer =
+        !Number.isFinite(nextPage) && i === lastIndexWithNumericPage
       if (isTrailer) continue
 
       // Skip 1-page ranges. They produce false positives when several TOC
