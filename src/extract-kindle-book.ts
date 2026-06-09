@@ -785,6 +785,23 @@ async function main() {
 
   progressBarNewline()
 
+  // Fail early: if a fresh run captured zero pages, the reader never produced
+  // a single screenshot (login failed, the book never opened, or the
+  // TOC/navigation selectors changed). Writing an empty metadata.json and
+  // exiting 0 here would let a `&&` chain proceed to transcription against
+  // nothing. Throw instead so the top-level handler stops the pipeline.
+  // (Resumed runs always carry their already-extracted pages, so this only
+  // trips on a genuinely empty extraction.)
+  if (pages.length === 0) {
+    await page.close().catch(() => {})
+    await context.close().catch(() => {})
+    throw new Error(
+      'No pages were extracted — the reader produced no captureable pages. ' +
+        'This usually means Amazon login failed, the book did not open, or the ' +
+        'reader navigation/TOC selectors changed. Nothing was saved; re-run to retry.'
+    )
+  }
+
   const result: BookMetadata = { info: info!, meta: meta!, toc, pages }
 
   // Verification: Check if all expected pages were extracted
@@ -983,4 +1000,21 @@ function parseTocItems(tocItems: TocItem[]) {
   }
 }
 
-await main()
+try {
+  await main()
+} catch (err) {
+  console.error(
+    `\n${colors.brightRed}❌ Extraction failed:${colors.reset} ${
+      err instanceof Error ? err.message : String(err)
+    }`
+  )
+  if (err instanceof Error && err.stack) {
+    console.error(`${colors.dim}${err.stack}${colors.reset}`)
+  }
+  // Force a non-zero exit so a `pnpm tsx … && pnpm tsx …` chain stops here
+  // instead of running transcription against a missing/partial extraction.
+  // process.exit (rather than rethrowing) also guarantees we tear down any
+  // still-open Playwright browser, which would otherwise keep the event loop
+  // alive and hang the entire command chain.
+  process.exit(1)
+}

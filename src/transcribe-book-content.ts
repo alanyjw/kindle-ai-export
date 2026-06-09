@@ -761,4 +761,17 @@ async function main() {
   }
 }
 
-await main()
+try {
+  await main()
+} catch (err) {
+  console.error(
+    `\n❌ Transcription failed: ${
+      err instanceof Error ? err.message : String(err)
+    }`
+  )
+  if (err instanceof Error && err.stack) {
+    console.error(err.stack)
+  }
+  // Non-zero exit stops a `&&` pipeline before it reaches the export step.
+  process.exit(1)
+}

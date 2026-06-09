@@ -360,5 +360,17 @@ async function main() {
 
 const entry = process.argv[1]
 if (entry && import.meta.url === pathToFileURL(entry).href) {
-  await main()
+  try {
+    await main()
+  } catch (err) {
+    console.error(
+      `\n❌ Markdown export failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    )
+    if (err instanceof Error && err.stack) {
+      console.error(err.stack)
+    }
+    process.exit(1)
+  }
 }
