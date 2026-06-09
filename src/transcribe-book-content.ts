@@ -21,6 +21,7 @@ import {
   getEnv,
   parseScreenshotFilename,
   progressBarNewline,
+  reportFatalError,
   resolveOutDir,
   sanitizeDirname,
   setupTimestampedLogger
@@ -764,14 +765,8 @@ async function main() {
 try {
   await main()
 } catch (err) {
-  console.error(
-    `\n❌ Transcription failed: ${
-      err instanceof Error ? err.message : String(err)
-    }`
-  )
-  if (err instanceof Error && err.stack) {
-    console.error(err.stack)
-  }
-  // Non-zero exit stops a `&&` pipeline before it reaches the export step.
+  // Write to the real stderr (the console is redirected to the log file) and
+  // exit non-zero so a `&&` pipeline stops before it reaches the export step.
+  reportFatalError('Transcription failed', err)
   process.exit(1)
 }

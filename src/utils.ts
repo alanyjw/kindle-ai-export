@@ -1,4 +1,4 @@
-import { createWriteStream, type Dirent } from 'node:fs'
+import { createWriteStream, writeSync, type Dirent } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -101,6 +101,21 @@ export async function resolveOutDir(asin: string): Promise<string> {
   } catch {}
 
   return path.join(baseOutDir, asin)
+}
+
+// Print a fatal error to the real stderr (file descriptor 2), bypassing any
+// console override installed by setupTimestampedLogger — which redirects
+// console.* to the log file and would otherwise hide the message from the
+// terminal. writeSync flushes synchronously, so the line survives an
+// immediate process.exit() (which skips the log stream's 'beforeExit' flush).
+export function reportFatalError(label: string, err: unknown): void {
+  const detail = err instanceof Error ? (err.stack ?? err.message) : String(err)
+  try {
+    writeSync(2, `\n❌ ${label}: ${detail}\n`)
+  } catch {
+    // Last resort if the synchronous write itself fails.
+    console.error(`${label}:`, err)
+  }
 }
 
 function formatConsoleArgs(args: unknown[]): string {

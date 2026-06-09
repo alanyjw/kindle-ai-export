@@ -11,6 +11,7 @@ import {
   fileExists,
   getEnv,
   progressBarNewline,
+  reportFatalError,
   resolveOutDir,
   sanitizeDirname,
   setupTimestampedLogger
@@ -363,14 +364,8 @@ if (entry && import.meta.url === pathToFileURL(entry).href) {
   try {
     await main()
   } catch (err) {
-    console.error(
-      `\n❌ Markdown export failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    )
-    if (err instanceof Error && err.stack) {
-      console.error(err.stack)
-    }
+    // Write to the real stderr — the console is redirected to the log file.
+    reportFatalError('Markdown export failed', err)
     process.exit(1)
   }
 }

@@ -13,7 +13,8 @@ import {
   deromanize,
   getEnv,
   normalizeAuthors,
-  parseJsonpResponse
+  parseJsonpResponse,
+  reportFatalError
 } from './utils'
 
 // ANSI color codes for terminal output
@@ -1003,18 +1004,12 @@ function parseTocItems(tocItems: TocItem[]) {
 try {
   await main()
 } catch (err) {
-  console.error(
-    `\n${colors.brightRed}❌ Extraction failed:${colors.reset} ${
-      err instanceof Error ? err.message : String(err)
-    }`
-  )
-  if (err instanceof Error && err.stack) {
-    console.error(`${colors.dim}${err.stack}${colors.reset}`)
-  }
-  // Force a non-zero exit so a `pnpm tsx … && pnpm tsx …` chain stops here
-  // instead of running transcription against a missing/partial extraction.
-  // process.exit (rather than rethrowing) also guarantees we tear down any
-  // still-open Playwright browser, which would otherwise keep the event loop
-  // alive and hang the entire command chain.
+  // reportFatalError writes to the real stderr (not the redirected console),
+  // so the reason is visible on the terminal. Force a non-zero exit so a
+  // `pnpm tsx … && pnpm tsx …` chain stops here instead of running
+  // transcription against a missing/partial extraction — process.exit also
+  // tears down any still-open Playwright browser that would otherwise keep
+  // the event loop alive and hang the whole command chain.
+  reportFatalError('Extraction failed', err)
   process.exit(1)
 }
