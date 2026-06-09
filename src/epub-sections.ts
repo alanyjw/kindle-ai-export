@@ -53,16 +53,39 @@ function splitIndexForFragment(
   return idx >= 0 ? idx : 0
 }
 
+// Normalized comparison for titles/headings (case- and whitespace-insensitive).
+function equalsNormalized(a: string, b: string): boolean {
+  const n = (s: string) => s.replaceAll(/\s+/g, ' ').trim().toLowerCase()
+  return Boolean(n(b)) && n(a) === n(b)
+}
+
+// Turns a spine id into a human label for front-matter with no real title:
+// "titlepage-id212" → "Titlepage", "copyright-page-id213" → "Copyright Page",
+// "cover" → "Cover". Returns "" when nothing meaningful remains.
+export function humanizeSpineId(id: string): string {
+  const cleaned = id
+    .replace(/#.*$/, '')
+    .replace(/[-_]?id[-_]?\d+$/i, '')
+    .replace(/[-_]?\d+$/, '')
+    .replaceAll(/[-_]+/g, ' ')
+    .trim()
+  if (!cleaned) return ''
+  return cleaned.replace(/\b\p{L}/gu, (c) => c.toUpperCase())
+}
+
 // Picks a section title from an in-text leading heading (preferred, when it
-// passes the junk-guard) else a nav title; returns null to defer to "Section n".
+// passes the junk-guard and isn't just a repeat of the book title — title/
+// copyright pages commonly do that) else a nav title; returns null to defer to
+// a humanized spine-id / "Section n" label.
 function titleFor(
   fragmentHtml: string,
-  navTitle: string | undefined
+  navTitle: string | undefined,
+  bookTitle: string
 ): { title: string | null; stripLeadingHeading: boolean } {
   const heading = firstHeading(parse(fragmentHtml))
   if (heading) {
     const text = headingText(heading)
-    if (isPromotableHeading(text)) {
+    if (isPromotableHeading(text) && !equalsNormalized(text, bookTitle)) {
       return { title: text, stripLeadingHeading: true }
     }
   }
@@ -76,7 +99,8 @@ function titleFor(
 export async function deriveSections(
   spine: EpubSpineItem[],
   nav: EpubNavEntry[],
-  getHtml: (id: string) => Promise<string>
+  getHtml: (id: string) => Promise<string>,
+  bookTitle = ''
 ): Promise<Section[]> {
   const sections: Array<Omit<Section, 'title'> & { title: string | null }> = []
 
@@ -109,7 +133,11 @@ export async function deriveSections(
     if (distinct.length === 0) {
       // Orphan whole-file section (no cross-file merge — avoids misattribution).
       const wholeHtml = serializeNodes(childNodes)
-      const { title, stripLeadingHeading } = titleFor(wholeHtml, undefined)
+      const { title, stripLeadingHeading } = titleFor(
+        wholeHtml,
+        undefined,
+        bookTitle
+      )
       sections.push({
         key: S.id,
         title,
@@ -133,7 +161,11 @@ export async function deriveSections(
           ? distinct[i + 1]!.splitIndex
           : childNodes.length
       const segHtml = serializeNodes(childNodes.slice(start, end))
-      const { title, stripLeadingHeading } = titleFor(segHtml, h.entry.title)
+      const { title, stripLeadingHeading } = titleFor(
+        segHtml,
+        h.entry.title,
+        bookTitle
+      )
       const key = h.entry.fragment ? `${S.id}#${h.entry.fragment}` : S.id
       return {
         key,
@@ -148,7 +180,11 @@ export async function deriveSections(
     if (leadNodes.length) {
       const leadHtml = serializeNodes(leadNodes)
       const leadHeading = firstHeading(parse(leadHtml))
-      if (leadHeading && isPromotableHeading(headingText(leadHeading))) {
+      if (
+        leadHeading &&
+        isPromotableHeading(headingText(leadHeading)) &&
+        !equalsNormalized(headingText(leadHeading), bookTitle)
+      ) {
         sections.push({
           key: `${S.id}#__lead`,
           title: headingText(leadHeading),
@@ -164,9 +200,10 @@ export async function deriveSections(
     sections.push(...hitSections)
   }
 
-  // Fill deferred titles with their final 1-based position.
+  // Fill deferred titles: a human label from the spine id (front-matter like
+  // cover/title/copyright), else the 1-based position.
   return sections.map((s, i) => ({
     ...s,
-    title: s.title ?? `Section ${i + 1}`
+    title: s.title ?? (humanizeSpineId(s.key) || `Section ${i + 1}`)
   }))
 }

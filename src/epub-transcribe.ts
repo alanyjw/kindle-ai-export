@@ -148,8 +148,11 @@ export async function extractEpub(
       getEpubMetadata(epubPath)
     ])
 
-    const sections = await deriveSections(spine, nav, (id) =>
-      getEpubChapterHtml(epubPath, id)
+    const sections = await deriveSections(
+      spine,
+      nav,
+      (id) => getEpubChapterHtml(epubPath, id),
+      meta.title
     )
 
     const imagesDir = path.join(outDir, 'images')

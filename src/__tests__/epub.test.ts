@@ -10,9 +10,11 @@ import {
   isPromotableHeading,
   sectionHtmlToMarkdown
 } from '../epub-markdown'
+import { normalizeAuthors } from '../epub'
+import { humanizeSpineId } from '../epub-sections'
 import { extractEpub } from '../epub-transcribe'
 import { verifyBookContent } from '../verify-book-content'
-import { buildFixtureEpub } from './helpers/build-fixture-epub'
+import { buildFixtureEpub, containerXml } from './helpers/build-fixture-epub'
 import { fixtureA, fixtureB } from './fixtures/epub-fixtures'
 
 const tmpDirs: string[] = []
@@ -50,6 +52,25 @@ describe('isPromotableHeading', () => {
     expect(isPromotableHeading('')).toBe(false)
     expect(isPromotableHeading('—')).toBe(false)
     expect(isPromotableHeading('***')).toBe(false)
+  })
+})
+
+describe('normalizeAuthors', () => {
+  it('strips trailing semicolons, splits multiples, de-dupes', () => {
+    expect(normalizeAuthors('Addy Osmani;')).toEqual(['Addy Osmani'])
+    expect(normalizeAuthors('Ada; Bee')).toEqual(['Ada', 'Bee'])
+    expect(normalizeAuthors('Ada; Ada')).toEqual(['Ada'])
+    expect(normalizeAuthors('')).toEqual([])
+    expect(normalizeAuthors(undefined)).toEqual([])
+  })
+})
+
+describe('humanizeSpineId', () => {
+  it('turns front-matter spine ids into human labels', () => {
+    expect(humanizeSpineId('cover')).toBe('Cover')
+    expect(humanizeSpineId('titlepage-id212')).toBe('Titlepage')
+    expect(humanizeSpineId('copyright-page-id213')).toBe('Copyright Page')
+    expect(humanizeSpineId('id999')).toBe('') // nothing meaningful left
   })
 })
 
@@ -191,6 +212,58 @@ describe('extractEpub — fixture A (single-file + NCX)', () => {
     const kinds = res.issues.map((i) => i.kind)
     expect(kinds).not.toContain('unparseable-screenshot')
     expect(kinds).not.toContain('empty-chapter')
+  })
+})
+
+describe('extractEpub — front-matter cleanup', () => {
+  function frontMatterEpub() {
+    const opf = `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="b">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="b">urn:uuid:fm</dc:identifier>
+    <dc:title>My Book</dc:title>
+    <dc:creator>Jane Doe;</dc:creator>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
+    <item id="titlepage-id212" href="title.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="cover"/>
+    <itemref idref="titlepage-id212"/>
+    <itemref idref="ch1"/>
+  </spine>
+</package>`
+    const ncx = `<?xml version="1.0"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><navMap>
+<navPoint id="n1" playOrder="1"><navLabel><text>Chapter 1</text></navLabel><content src="ch1.xhtml#c1"/></navPoint>
+</navMap></ncx>`
+    const cover = `<html xmlns="http://www.w3.org/1999/xhtml"><body><p>Cover artwork placeholder.</p></body></html>`
+    // Title page repeats the book title as its only heading.
+    const title = `<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>My Book</h1><p>by Jane Doe</p></body></html>`
+    const ch1 = `<html xmlns="http://www.w3.org/1999/xhtml"><body><h1 id="c1">Chapter 1</h1><p>Real content.</p></body></html>`
+    return {
+      'META-INF/container.xml': containerXml('content.opf'),
+      'content.opf': opf,
+      'toc.ncx': ncx,
+      'cover.xhtml': cover,
+      'title.xhtml': title,
+      'ch1.xhtml': ch1
+    }
+  }
+
+  it('relabels front matter and normalizes the author', async () => {
+    const epubPath = await buildFixtureEpub(frontMatterEpub(), 'fm')
+    const out = await tmpOut()
+    const { metadata } = await extractEpub(epubPath, out)
+
+    expect(metadata.meta.authorList).toEqual(['Jane Doe']) // no trailing ;
+    const titles = metadata.toc.map((t) => t.title)
+    // cover → humanized label, title page → NOT the book title, chapter kept
+    expect(titles.slice(0, 3)).toEqual(['Cover', 'Titlepage', 'Chapter 1'])
+    // the book title is never used as a section heading
+    expect(titles).not.toContain('My Book')
   })
 })
 

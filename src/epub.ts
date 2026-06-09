@@ -45,14 +45,24 @@ export async function closeEpub(epubPath: string): Promise<void> {
   epubCache.delete(epubPath)
 }
 
+// epub2 collapses multiple <dc:creator> into a single string and can leave
+// trailing/joining `;` (e.g. "Addy Osmani;" or "Ada; Bee"). Split, trim, drop
+// empties, and de-dupe into a clean author list.
+export function normalizeAuthors(creator: unknown): string[] {
+  if (typeof creator !== 'string') return []
+  const parts = creator
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return [...new Set(parts)]
+}
+
 export async function getEpubMetadata(epubPath: string): Promise<EpubMetadata> {
   const ep = await load(epubPath)
   const meta = (ep as any).metadata ?? {}
-  // epub2 collapses multiple <dc:creator> into a single string.
-  const creator = typeof meta.creator === 'string' ? meta.creator.trim() : ''
   return {
     title: typeof meta.title === 'string' ? meta.title : '',
-    authors: creator ? [creator] : [],
+    authors: normalizeAuthors(meta.creator),
     language: typeof meta.language === 'string' ? meta.language : undefined,
     publisher: typeof meta.publisher === 'string' ? meta.publisher : undefined
   }
