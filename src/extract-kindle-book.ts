@@ -76,6 +76,15 @@ async function main() {
       const expectedPages =
         (existingMetadata.meta as any)?.totalPages || existingPages.length
 
+      // metadata.json can exist with `pages`/`toc` but no `meta`/`info` when a
+      // prior run captured screenshots yet never intercepted Amazon's
+      // startReading / YJmetadata network responses. The exporters require
+      // `meta`, so a page-complete-but-metadata-missing book must NOT
+      // short-circuit as "complete" — relaunching lets the response handler
+      // recapture meta/info, and existing screenshots are skipped so it's cheap.
+      const hasBookMeta =
+        existingMetadata.meta != null && existingMetadata.info != null
+
       // Analyze screenshot files to understand extraction progress
       let actualScreenshots = 0
       let firstPage = 0
@@ -165,8 +174,10 @@ async function main() {
           )
         }
 
-        // Check if we've reached the expected end
-        if (lastPage >= expectedPages) {
+        // Check if we've reached the expected end. Only treat the book as
+        // complete when the captured metadata also carries `meta`/`info`;
+        // otherwise fall through so we relaunch and recover them.
+        if (lastPage >= expectedPages && hasBookMeta) {
           console.warn(
             '✅ Extraction appears complete based on page range. Use FORCE=true to re-extract.'
           )
@@ -185,10 +196,20 @@ async function main() {
           `${colors.yellow}⚠️  Prior extraction left no screenshots. Treating as incomplete and resuming from page ${colors.bright}1${colors.reset}${colors.yellow}...${colors.reset}`
         )
       } else if (extractedPages >= expectedPages) {
+        if (hasBookMeta) {
+          console.warn(
+            `${colors.green}✅ Extraction appears complete. Use FORCE=true to re-extract.${colors.reset}`
+          )
+          return
+        }
+        // Pages are all captured but `meta`/`info` never made it into
+        // metadata.json. Relaunch (rather than returning) so the response
+        // handler can recapture them; existing screenshots are skipped. Without
+        // this the exporters keep failing with "invalid book metadata: missing
+        // meta" and FORCE=true would be the only way out.
         console.warn(
-          `${colors.green}✅ Extraction appears complete. Use FORCE=true to re-extract.${colors.reset}`
+          `${colors.yellow}⚠️  Pages look complete, but book metadata (meta/info) is missing from metadata.json — relaunching to recover it (existing screenshots are skipped)...${colors.reset}`
         )
-        return
       } else {
         console.warn(
           `${colors.yellow}⚠️  Incomplete extraction detected. Will resume from page ${colors.bright}${extractedPages + 1}${colors.reset}${colors.yellow}...${colors.reset}`
@@ -804,6 +825,26 @@ async function main() {
   }
 
   const result: BookMetadata = { info: info!, meta: meta!, toc, pages }
+
+  // The exporters require `meta` (book title, author, page totals) and `info`.
+  // These come from Amazon's startReading / YJmetadata responses intercepted
+  // during this run. If they never fired, surface it loudly on the real stderr
+  // — otherwise we'd write a metadata.json that silently breaks the exporters
+  // with "invalid book metadata: missing meta", and the next run would just
+  // relaunch to try recovering it again.
+  if (meta == null || info == null) {
+    const missing = [meta == null && 'meta', info == null && 'info']
+      .filter(Boolean)
+      .join(' and ')
+    reportFatalError(
+      'Extraction warning',
+      new Error(
+        `book ${missing} was not captured (Amazon's metadata responses never fired). ` +
+          `Pages were saved, but the export step will fail until this is recovered. ` +
+          `Re-run extraction to retry capturing it.`
+      )
+    )
+  }
 
   // Verification: Check if all expected pages were extracted
   const extractedPages = pages.length
