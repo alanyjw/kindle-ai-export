@@ -7,6 +7,10 @@ import { input } from '@inquirer/prompts'
 import delay from 'delay'
 import { chromium, type Locator } from 'playwright'
 
+import {
+  type MetadataFetcher,
+  recoverBookMetadata as recoverBookMetadataImpl
+} from './recover-book-metadata'
 import type { BookInfo, BookMeta, BookMetadata, PageChunk } from './types'
 import {
   assert,
@@ -314,7 +318,7 @@ async function main() {
     } catch {}
   })
 
-  // Actively fetch book metadata using the authenticated browser context.
+  // Actively recover book metadata when the reader serves itself from cache.
   //
   // The passive `page.on('response')` listener above only captures startReading
   // / YJmetadata when the reader actually issues them over the network. On a
@@ -323,67 +327,59 @@ async function main() {
   // unset — which then breaks every exporter ("invalid book metadata: missing
   // meta").
   //
-  // `page.request` replays the same requests with the context's cookies but
-  // bypasses CORS, the HTTP cache, and the service worker, so it succeeds even
-  // when the reader served itself entirely from cache. Endpoint shape mirrors
-  // kindle-api-ky's getBookDetails: startReading → JSON (carries metadataUrl) →
-  // fetch metadataUrl → JSONP → parse.
+  // The fetch runs INSIDE the page via page.evaluate, so it carries the reader's
+  // exact cookies, Referer, and User-Agent. A bare `page.request` (a Node-side
+  // client) gets a 403 from startReading because it doesn't look like the
+  // in-page reader. For a cross-origin metadataUrl that the in-page fetch can't
+  // read (CORS), we fall back to `page.request`, which isn't bound by CORS.
+  const inPageFetcher: MetadataFetcher = {
+    async fetchText(url) {
+      const viaPage = await page
+        .evaluate(async (u) => {
+          try {
+            // Runs in the browser; cast the init since the project's Node lib
+            // types don't include the DOM RequestInit `cache` field.
+            const r = await fetch(u, {
+              credentials: 'include',
+              cache: 'no-store'
+            } as any)
+            return { status: r.status, ok: r.ok, body: await r.text() }
+          } catch {
+            // Transport/CORS failure — signal a fallback to the caller.
+            return null
+          }
+        }, url)
+        .catch(() => null)
+      if (viaPage) return viaPage
+
+      // Fallback for cross-origin URLs the in-page fetch couldn't read.
+      try {
+        const r = await page.request.get(url)
+        return { status: r.status(), ok: r.ok(), body: await r.text() }
+      } catch {
+        return null
+      }
+    }
+  }
+
   async function recoverBookMetadata(): Promise<void> {
     if (info != null && meta != null) return
 
-    try {
-      const startReadingUrl = `https://read.amazon.com/service/mobile/reader/startReading?asin=${asin}&clientVersion=20000100`
-      const res = await page.request.get(startReadingUrl, {
-        headers: { accept: 'application/json' }
-      })
-      if (!res.ok()) {
-        console.warn(
-          `${colors.yellow}⚠️  metadata recovery: startReading returned HTTP ${res.status()}${colors.reset}`
-        )
-        return
-      }
+    const result = await recoverBookMetadataImpl(asin!, inPageFetcher, {
+      info,
+      meta
+    })
+    info = result.info
+    meta = result.meta
 
-      const body: any = await res.json()
-      const metadataUrl: string | undefined = body.metadataUrl
-
-      if (info == null) {
-        const cleaned = { ...body }
-        delete cleaned.karamelToken
-        delete cleaned.metadataUrl
-        delete cleaned.YJFormatVersion
-        info = cleaned
-      }
-
-      if (meta == null && metadataUrl) {
-        const metaRes = await page.request.get(metadataUrl)
-        if (!metaRes.ok()) {
-          console.warn(
-            `${colors.yellow}⚠️  metadata recovery: metadata fetch returned HTTP ${metaRes.status()}${colors.reset}`
-          )
-          return
-        }
-        const metadata = parseJsonpResponse<any>(await metaRes.text())
-        if (!metadata || metadata.asin !== asin) {
-          console.warn(
-            `${colors.yellow}⚠️  metadata recovery: metadata was empty or for a different ASIN${colors.reset}`
-          )
-          return
-        }
-        delete metadata.cpr
-        if (Array.isArray(metadata.authorsList)) {
-          metadata.authorsList = normalizeAuthors(metadata.authorsList)
-        }
-        meta = metadata
-      }
-
-      if (info != null && meta != null) {
-        console.warn(
-          `${colors.green}✓ Recovered book metadata via direct fetch (the reader had served it from cache).${colors.reset}`
-        )
-      }
-    } catch (err: any) {
+    for (const warning of result.warnings) {
       console.warn(
-        `${colors.yellow}⚠️  metadata recovery failed: ${err?.message ?? String(err)}${colors.reset}`
+        `${colors.yellow}⚠️  metadata recovery: ${warning}${colors.reset}`
+      )
+    }
+    if (info != null && meta != null && result.warnings.length === 0) {
+      console.warn(
+        `${colors.green}✓ Recovered book metadata via direct fetch (the reader had served it from cache).${colors.reset}`
       )
     }
   }
