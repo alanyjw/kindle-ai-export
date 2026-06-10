@@ -6,6 +6,9 @@ import path from 'node:path'
 import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
+import { setBookMeta } from './set-book-meta'
+import { createOpenAITitlePageExtractor } from './title-page-extractor-openai'
+import { recoverMetaFromTitlePage } from './title-page-meta'
 import type { ContentChunk } from './types'
 import { extractEpub } from './epub-transcribe'
 import { isBlankPageFromPng } from './image'
@@ -412,6 +415,62 @@ async function ocrImageToText(
   throw new Error(`Max retries (${maxRetries}) exceeded`)
 }
 
+// Backfill a missing book title/author from the captured title-page screenshots
+// (account-independent — no Amazon API). Runs when metadata.json exists but has
+// no `meta.title`, e.g. because Amazon 403'd the reader metadata API during
+// extraction. No-ops (and never throws) when the title is already present, when
+// there's no metadata.json (PDF mode), or when the vision call is unavailable.
+async function backfillTitleFromTitlePage(outDir: string): Promise<void> {
+  const metadataPath = path.join(outDir, 'metadata.json')
+
+  let metadata: { meta?: { title?: string }; pages?: unknown[] }
+  try {
+    metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as {
+      meta?: { title?: string }
+      pages?: unknown[]
+    }
+  } catch {
+    return // No metadata.json (e.g. PDF mode) — nothing to backfill.
+  }
+  if (metadata?.meta?.title) return
+  if (!Array.isArray(metadata.pages) || metadata.pages.length === 0) return
+
+  console.warn(
+    'ℹ️  Book metadata is missing a title — attempting recovery from the title page...'
+  )
+  try {
+    const openai = new OpenAIClient()
+    const extractor = createOpenAITitlePageExtractor(openai)
+    const { meta, warnings } = await recoverMetaFromTitlePage(
+      metadata as Parameters<typeof recoverMetaFromTitlePage>[0],
+      (paths) => Promise.all(paths.map((p) => fs.readFile(p))),
+      extractor
+    )
+    for (const w of warnings) {
+      console.warn(`title-page recovery: ${w}`)
+    }
+    if (meta.title || (meta.authorList && meta.authorList.length > 0)) {
+      await setBookMeta(
+        outDir,
+        meta.title ?? path.basename(outDir),
+        meta.authorList ?? []
+      )
+      console.warn(
+        `✓ Recovered book metadata from the title page (title=${JSON.stringify(
+          meta.title
+        )}, authors=${JSON.stringify(meta.authorList)}).`
+      )
+    }
+  } catch (err: any) {
+    console.warn(
+      `title-page recovery failed: ${err?.message ?? String(err)} ` +
+        `(set it manually with: pnpm tsx src/set-book-meta.ts ${path.basename(
+          outDir
+        )} "<title>" "<authors>")`
+    )
+  }
+}
+
 async function main() {
   const arg = process.argv[2]
   const isPdfMode = Boolean(arg && /\.pdf$/i.test(arg))
@@ -539,6 +598,9 @@ async function main() {
       )
     )
     console.log(JSON.stringify(existingContent, null, 2))
+    // Even when there's nothing to transcribe, a prior extraction may have
+    // failed to capture the book title — recover it from the title page.
+    await backfillTitleFromTitlePage(outDir)
     return
   }
 
@@ -745,6 +807,12 @@ async function main() {
   console.log(JSON.stringify(merged, null, 2))
 
   progressBarNewline()
+
+  // Backfill the book title from the title page if extraction couldn't capture
+  // it from Amazon (Kindle mode only; PDF mode has no metadata.json).
+  if (!pdfPath) {
+    await backfillTitleFromTitlePage(outDir)
+  }
 
   // Sanity-check the output. Warns on missing screenshots, index/page mismatches
   // vs. filename, and (if metadata.json is present) chapters with no text in

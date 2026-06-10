@@ -384,6 +384,51 @@ async function main() {
     }
   }
 
+  // Force the reader to re-issue its OWN metadata requests by defeating the
+  // cache. On a warm persistent profile the Kindle reader restores from its
+  // service-worker cache and never re-requests startReading / YJmetadata, so
+  // the passive listener never sees them. Replaying the request ourselves gets
+  // a 403 (it doesn't look like the in-page reader). The fix: clear the SW /
+  // HTTP cache and reload so the reader makes the genuine request — which is
+  // authenticated, carries the right headers, and IS captured passively.
+  async function forceReaderMetadataRefresh(): Promise<void> {
+    if (info != null && meta != null) return
+    let cdp: Awaited<ReturnType<typeof context.newCDPSession>> | undefined
+    try {
+      cdp = await context.newCDPSession(page)
+      await cdp.send('Network.setCacheDisabled', { cacheDisabled: true })
+      await page.evaluate(async () => {
+        // Runs in the browser; the project's Node lib types don't include the
+        // DOM serviceWorker / CacheStorage globals, so reach them dynamically.
+        try {
+          const nav = navigator as any
+          if (nav.serviceWorker) {
+            const regs = await nav.serviceWorker.getRegistrations()
+            await Promise.all(regs.map((r: any) => r.unregister()))
+          }
+          const cacheStorage = (globalThis as any).caches
+          if (cacheStorage) {
+            const keys = await cacheStorage.keys()
+            await Promise.all(keys.map((k: any) => cacheStorage.delete(k)))
+          }
+        } catch {}
+      })
+      await page.reload({ timeout: 60_000, waitUntil: 'domcontentloaded' })
+      // Give the reader's bootstrap XHRs a beat to fire and be captured.
+      await delay(3000)
+    } catch (err: any) {
+      console.warn(
+        `${colors.yellow}⚠️  cache-bust metadata refresh failed: ${err?.message ?? String(err)}${colors.reset}`
+      )
+    } finally {
+      // Re-enable the HTTP cache so the page-capture loop isn't slowed by
+      // re-fetching reader assets on every navigation.
+      try {
+        await cdp?.send('Network.setCacheDisabled', { cacheDisabled: false })
+      } catch {}
+    }
+  }
+
   await Promise.any([
     page.goto(bookReaderUrl, { timeout: 60_000 }),
     page.waitForURL('**/ap/signin', { timeout: 60_000 })
@@ -517,6 +562,12 @@ async function main() {
 
   // Initial dismiss with a short wait — handles both the "alert is already up"
   // and "alert appears within ~3s" cases.
+  // First, try to make the reader re-issue its own (authenticated) metadata
+  // requests by busting the cache + reloading; the passive listener captures
+  // the genuine response. This runs before the alert/settings handling because
+  // it reloads the page (which would reset them).
+  await forceReaderMetadataRefresh()
+
   await dismissPossibleAlert(3000)
   await ensureFixedHeaderUI()
   // One more dismiss in case the alert appeared between calls (the reader UI
@@ -524,9 +575,9 @@ async function main() {
   await dismissPossibleAlert(500)
   await updateSettings()
 
-  // Guarantee we have book metadata even when the reader restored from cache
-  // and never re-issued the requests the passive listener depends on. Doing
-  // this before the TOC walk also lets the out-dir get renamed with the title.
+  // Fallback: if the cache-bust reload still didn't surface metadata, replay
+  // the request directly. Doing this before the TOC walk also lets the out-dir
+  // get renamed with the title.
   await recoverBookMetadata()
 
   const initialPageNav = await getPageNav()
