@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import PDFDocument from 'pdfkit'
 
+import { resolveBookMeta } from './book-meta'
 import type { BookMetadata, ContentChunk } from './types'
 import { assert, getEnv, resolveOutDir, sanitizeDirname } from './utils'
 
@@ -39,11 +40,16 @@ async function main() {
     await fsp.readFile(path.join(outDir, 'metadata.json'), 'utf8')
   ) as BookMetadata
   assert(content.length, 'no book content found')
-  assert(metadata.meta, 'invalid book metadata: missing meta')
   assert(metadata.toc?.length, 'invalid book metadata: missing toc')
 
-  const title = metadata.meta.title
-  const authors = metadata.meta.authorList
+  // Degrade gracefully when `meta` is missing (e.g. Amazon 403'd the reader
+  // metadata API during extraction) rather than hard-failing the export.
+  const resolved = resolveBookMeta(metadata, outDir)
+  if (resolved.warning) {
+    console.warn(resolved.warning)
+  }
+  const title = resolved.title
+  const authors = resolved.authorList
 
   const doc = new PDFDocument({
     autoFirstPage: true,

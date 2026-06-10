@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { resolveBookMeta } from './book-meta'
 import type { BookMetadata, ContentChunk } from './types'
 import {
   assert,
@@ -240,11 +241,18 @@ export async function exportBookMarkdown(
   const metadata = JSON.parse(
     await fs.readFile(metadataPath, 'utf8')
   ) as BookMetadata
-  assert(metadata.meta, 'invalid book metadata: missing meta')
   assert(metadata.toc?.length, 'invalid book metadata: missing toc')
 
-  const title = metadata.meta.title
-  const authors = metadata.meta.authorList
+  // Degrade gracefully when `meta` is missing (e.g. Amazon 403'd the reader
+  // metadata API during extraction) instead of hard-failing a fully
+  // transcribed book over two missing strings. resolveBookMeta falls back to a
+  // title derived from the out-dir and warns how to set the real one.
+  const resolved = resolveBookMeta(metadata, outDir)
+  if (resolved.warning) {
+    console.warn(resolved.warning)
+  }
+  const title = resolved.title
+  const authors = resolved.authorList
 
   // Detect location-mode by majority — mirrors the extract pipeline. Hybrid
   // books like reflowable text with one stray back-matter page entry are
