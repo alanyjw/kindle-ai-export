@@ -314,6 +314,80 @@ async function main() {
     } catch {}
   })
 
+  // Actively fetch book metadata using the authenticated browser context.
+  //
+  // The passive `page.on('response')` listener above only captures startReading
+  // / YJmetadata when the reader actually issues them over the network. On a
+  // warm persistent profile the Kindle reader frequently restores from its
+  // service-worker cache and never re-requests them, leaving `info`/`meta`
+  // unset — which then breaks every exporter ("invalid book metadata: missing
+  // meta").
+  //
+  // `page.request` replays the same requests with the context's cookies but
+  // bypasses CORS, the HTTP cache, and the service worker, so it succeeds even
+  // when the reader served itself entirely from cache. Endpoint shape mirrors
+  // kindle-api-ky's getBookDetails: startReading → JSON (carries metadataUrl) →
+  // fetch metadataUrl → JSONP → parse.
+  async function recoverBookMetadata(): Promise<void> {
+    if (info != null && meta != null) return
+
+    try {
+      const startReadingUrl = `https://read.amazon.com/service/mobile/reader/startReading?asin=${asin}&clientVersion=20000100`
+      const res = await page.request.get(startReadingUrl, {
+        headers: { accept: 'application/json' }
+      })
+      if (!res.ok()) {
+        console.warn(
+          `${colors.yellow}⚠️  metadata recovery: startReading returned HTTP ${res.status()}${colors.reset}`
+        )
+        return
+      }
+
+      const body: any = await res.json()
+      const metadataUrl: string | undefined = body.metadataUrl
+
+      if (info == null) {
+        const cleaned = { ...body }
+        delete cleaned.karamelToken
+        delete cleaned.metadataUrl
+        delete cleaned.YJFormatVersion
+        info = cleaned
+      }
+
+      if (meta == null && metadataUrl) {
+        const metaRes = await page.request.get(metadataUrl)
+        if (!metaRes.ok()) {
+          console.warn(
+            `${colors.yellow}⚠️  metadata recovery: metadata fetch returned HTTP ${metaRes.status()}${colors.reset}`
+          )
+          return
+        }
+        const metadata = parseJsonpResponse<any>(await metaRes.text())
+        if (!metadata || metadata.asin !== asin) {
+          console.warn(
+            `${colors.yellow}⚠️  metadata recovery: metadata was empty or for a different ASIN${colors.reset}`
+          )
+          return
+        }
+        delete metadata.cpr
+        if (Array.isArray(metadata.authorsList)) {
+          metadata.authorsList = normalizeAuthors(metadata.authorsList)
+        }
+        meta = metadata
+      }
+
+      if (info != null && meta != null) {
+        console.warn(
+          `${colors.green}✓ Recovered book metadata via direct fetch (the reader had served it from cache).${colors.reset}`
+        )
+      }
+    } catch (err: any) {
+      console.warn(
+        `${colors.yellow}⚠️  metadata recovery failed: ${err?.message ?? String(err)}${colors.reset}`
+      )
+    }
+  }
+
   await Promise.any([
     page.goto(bookReaderUrl, { timeout: 60_000 }),
     page.waitForURL('**/ap/signin', { timeout: 60_000 })
@@ -453,6 +527,11 @@ async function main() {
   // can be flaky about when it shows the sync prompt).
   await dismissPossibleAlert(500)
   await updateSettings()
+
+  // Guarantee we have book metadata even when the reader restored from cache
+  // and never re-issued the requests the passive listener depends on. Doing
+  // this before the TOC walk also lets the out-dir get renamed with the title.
+  await recoverBookMetadata()
 
   const initialPageNav = await getPageNav()
 
