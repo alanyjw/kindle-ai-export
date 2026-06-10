@@ -207,6 +207,13 @@ pnpm tsx src/transcribe-book-content.ts
 - The result is stored as JSON to `out/${asin}/content.json`.
 - Example: [examples/B0819W19WD/content.json](./examples/B0819W19WD/content.json)
 
+> [!NOTE]
+> If an export later fails with `invalid book metadata: missing meta`, Amazon's
+> book metadata (title/author) wasn't captured during extraction. The pipeline
+> tries to recover it automatically; you can also set it manually with
+> `pnpm tsx src/set-book-meta.ts <asin> "<title>" "<author>"`. See
+> [docs/metadata-recovery.md](./docs/metadata-recovery.md) for the full story.
+
 You can also transcribe a local PDF (ASIN not required):
 
 ```sh
