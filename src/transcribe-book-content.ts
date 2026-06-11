@@ -2,6 +2,7 @@ import 'dotenv/config'
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
@@ -90,27 +91,49 @@ function calculateBackoffDelay(
   return Math.min(exponentialDelay + jitter, maxDelay)
 }
 
-// Check if error is retryable
-function isRetryableError(error: any): boolean {
+// Transport-level error codes worth retrying. undici's global fetch surfaces
+// these on the error (or, for a "fetch failed" TypeError, on error.cause).
+const RETRYABLE_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ENOTFOUND',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EAI_AGAIN',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT'
+])
+
+// Check if error is retryable.
+export function isRetryableError(error: any): boolean {
   if (!error) return false
 
-  // Check for rate limit errors
-  if (error.status === 429 && error.type === 'tokens') return true
+  // Never retry these, regardless of status code (check before the broad 429).
+  if (error.type === 'insufficient_quota') return false
+  if (error.type === 'invalid_request_error') return false
 
-  // Check for server errors (5xx)
+  // Rate limits and transient server errors.
+  if (error.status === 429) return true
   if (error.status >= 500 && error.status < 600) return true
 
-  // Check for specific OpenAI error types
-  if (error.type === 'insufficient_quota') return false // Don't retry quota errors
-  if (error.type === 'invalid_request_error') return false // Don't retry invalid requests
-
-  // Check for network errors
-  if (
-    error.code === 'ECONNRESET' ||
-    error.code === 'ENOTFOUND' ||
-    error.code === 'ECONNREFUSED'
-  )
-    return true
+  // Network/transport errors. Node's global fetch (undici) throws a TypeError
+  // with message "fetch failed" whose real cause (ECONNRESET, socket timeout,
+  // pool exhaustion under high concurrency, …) is nested in `error.cause`. The
+  // previous top-level-only `error.code` check missed all of these, so genuine
+  // transient blips dropped the page instead of retrying. Walk the cause chain.
+  for (let e: any = error, depth = 0; e && depth < 5; e = e.cause, depth++) {
+    if (typeof e.code === 'string' && RETRYABLE_NETWORK_CODES.has(e.code)) {
+      return true
+    }
+    if (
+      typeof e.message === 'string' &&
+      /fetch failed|socket hang up|network|timed? ?out/i.test(e.message)
+    ) {
+      return true
+    }
+  }
 
   return false
 }
@@ -830,11 +853,16 @@ async function main() {
   }
 }
 
-try {
-  await main()
-} catch (err) {
-  // Write to the real stderr (the console is redirected to the log file) and
-  // exit non-zero so a `&&` pipeline stops before it reaches the export step.
-  reportFatalError('Transcription failed', err)
-  process.exit(1)
+// Only auto-run when invoked directly (e.g. `pnpm tsx src/transcribe-book-content.ts`),
+// so importing this module (e.g. from tests) doesn't kick off a transcription.
+const entry = process.argv[1]
+if (entry && import.meta.url === pathToFileURL(entry).href) {
+  try {
+    await main()
+  } catch (err) {
+    // Write to the real stderr (the console is redirected to the log file) and
+    // exit non-zero so a `&&` pipeline stops before it reaches the export step.
+    reportFatalError('Transcription failed', err)
+    process.exit(1)
+  }
 }
