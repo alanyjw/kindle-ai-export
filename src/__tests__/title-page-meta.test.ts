@@ -53,6 +53,28 @@ describe('selectTitlePageScreenshots', () => {
   it('returns [] when there are no pages', () => {
     expect(selectTitlePageScreenshots({ pages: [] })).toEqual([])
   })
+
+  it('prefers dedicated front-matter shots over content pages', () => {
+    const sel = selectTitlePageScreenshots({
+      pages: [{ index: 0, page: 13, total: 200, screenshot: 'body.png' }],
+      frontMatter: [
+        { title: 'Title Page', screenshot: 'front-matter/00-title-page.png' },
+        { title: 'Cover', screenshot: 'front-matter/01-cover.png' }
+      ]
+    })
+    expect(sel).toEqual([
+      'front-matter/00-title-page.png',
+      'front-matter/01-cover.png'
+    ])
+  })
+
+  it('falls back to content pages when frontMatter is empty', () => {
+    const sel = selectTitlePageScreenshots({
+      pages: [{ index: 0, page: 1, total: 10, screenshot: 'p0.png' }],
+      frontMatter: []
+    })
+    expect(sel).toEqual(['p0.png'])
+  })
 })
 
 describe('recoverMetaFromTitlePage', () => {

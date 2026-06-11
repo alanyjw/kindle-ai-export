@@ -655,6 +655,86 @@ async function main() {
 
   const toc: TocItem[] = tocItems.map(({ locator: _, ...tocItem }) => tocItem)
 
+  // Best-effort: capture front-matter page images (Title Page, Cover,
+  // Copyright) so the transcribe step can OCR the book title/author from them.
+  // The main content loop below starts at the first page-numbered TOC entry and
+  // skips front matter, so without this the title page is never screenshotted
+  // and title-page metadata recovery has nothing to read. Entirely wrapped:
+  // any failure logs a warning and falls back to the prior behavior.
+  const frontMatter: Array<{ title: string; screenshot: string }> = []
+  try {
+    const wantedFrontMatter = [/title\s*page/i, /^cover$/i, /copyright/i]
+    const capturedItems = new Set<TocItem>()
+    const fmDir = path.join(outDir, 'front-matter')
+    await fs.mkdir(fmDir, { recursive: true })
+
+    for (const re of wantedFrontMatter) {
+      const item = tocItems.find(
+        (t) => t.locator && re.test(t.title) && !capturedItems.has(t)
+      )
+      if (!item) continue
+      capturedItems.add(item)
+
+      await item.locator!.scrollIntoViewIfNeeded()
+      await item.locator!.click()
+      await delay(750)
+      // Close the TOC drawer so the reader image is visible for the screenshot.
+      await page
+        .locator('.side-menu-close-button')
+        .click()
+        .catch(() => {})
+      await delay(500)
+
+      const b = await page
+        .locator(krRendererMainImageSelector)
+        .screenshot({ type: 'png', scale: 'css' })
+      const slug =
+        item.title
+          .trim()
+          .toLowerCase()
+          .replaceAll(/[^a-z0-9]+/g, '-')
+          .replaceAll(/^-+|-+$/g, '') || 'front-matter'
+      const fmPath = path.join(
+        fmDir,
+        `${`${frontMatter.length}`.padStart(2, '0')}-${slug}.png`
+      )
+      await fs.writeFile(fmPath, b)
+      frontMatter.push({ title: item.title.trim(), screenshot: fmPath })
+
+      // Reopen the TOC for the next item / the content-start click below.
+      await page
+        .locator('ion-button[aria-label="Table of Contents"]')
+        .click()
+        .catch(() => {})
+      await delay(750)
+    }
+
+    if (frontMatter.length > 0) {
+      console.warn(
+        `${colors.cyan}📄${colors.reset} Captured ${frontMatter.length} front-matter page(s) for metadata recovery`
+      )
+    }
+  } catch (err: any) {
+    console.warn(
+      `${colors.yellow}⚠️  front-matter capture skipped: ${err?.message ?? String(err)}${colors.reset}`
+    )
+  }
+
+  // Ensure the TOC drawer is open for the content-start click below — the
+  // front-matter capture above toggles it and may have left it closed.
+  if (
+    !(await page
+      .locator('.side-menu-close-button')
+      .isVisible()
+      .catch(() => false))
+  ) {
+    await page
+      .locator('ion-button[aria-label="Table of Contents"]')
+      .click()
+      .catch(() => {})
+    await delay(750)
+  }
+
   const total = parsedToc.firstPageTocItem.total
   const pagePadding = `${total * 2}`.length
   await parsedToc.firstPageTocItem.locator!.scrollIntoViewIfNeeded()
@@ -950,7 +1030,13 @@ async function main() {
     )
   }
 
-  const result: BookMetadata = { info: info!, meta: meta!, toc, pages }
+  const result: BookMetadata = {
+    info: info!,
+    meta: meta!,
+    toc,
+    pages,
+    ...(frontMatter.length > 0 ? { frontMatter } : {})
+  }
 
   // The exporters require `meta` (book title, author, page totals) and `info`.
   // These come from Amazon's startReading / YJmetadata responses intercepted

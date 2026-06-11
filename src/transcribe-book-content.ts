@@ -446,17 +446,25 @@ async function ocrImageToText(
 async function backfillTitleFromTitlePage(outDir: string): Promise<void> {
   const metadataPath = path.join(outDir, 'metadata.json')
 
-  let metadata: { meta?: { title?: string }; pages?: unknown[] }
+  type BackfillMeta = {
+    meta?: { title?: string }
+    pages?: unknown[]
+    frontMatter?: Array<{ title?: string; screenshot: string }>
+  }
+  let metadata: BackfillMeta
   try {
-    metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as {
-      meta?: { title?: string }
-      pages?: unknown[]
-    }
+    metadata = JSON.parse(
+      await fs.readFile(metadataPath, 'utf8')
+    ) as BackfillMeta
   } catch {
     return // No metadata.json (e.g. PDF mode) — nothing to backfill.
   }
   if (metadata?.meta?.title) return
-  if (!Array.isArray(metadata.pages) || metadata.pages.length === 0) return
+  // Need something to OCR: either dedicated front-matter shots or page images.
+  const hasFrontMatter =
+    Array.isArray(metadata.frontMatter) && metadata.frontMatter.length > 0
+  const hasPages = Array.isArray(metadata.pages) && metadata.pages.length > 0
+  if (!hasFrontMatter && !hasPages) return
 
   console.warn(
     'ℹ️  Book metadata is missing a title — attempting recovery from the title page...'

@@ -69,9 +69,18 @@ export interface BookInfo {
   srl: number
 }
 
+export interface FrontMatterShot {
+  title: string
+  screenshot: string
+}
+
 export interface BookMetadata {
   info: BookInfo
   meta: BookMeta
   toc: TocItem[]
   pages: PageChunk[]
+  // Front-matter page screenshots (Title Page, Cover, …) captured for metadata
+  // recovery when the Amazon metadata API is unavailable. Optional: only the
+  // Kindle extractor produces these, and only on a best-effort basis.
+  frontMatter?: FrontMatterShot[]
 }

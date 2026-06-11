@@ -17,14 +17,24 @@ export interface RecoverFromTitlePageResult {
   warnings: string[]
 }
 
-// Pick the screenshots most likely to show the title/author. Front matter
-// (cover, title page, copyright) is always at the very start of the capture
-// regardless of page- vs location-mode, so the first few pages are the reliable
-// signal — no TOC-position alignment needed. Pure + testable.
+// Pick the screenshots most likely to show the title/author.
+//
+// Prefer the dedicated `frontMatter` shots (Title Page, Cover, Copyright)
+// captured by the Kindle extractor — those are exactly the pages with the
+// title/author. Otherwise fall back to the first few content pages, which works
+// for PDF/EPUB (where front matter is part of the page sequence). Pure +
+// testable.
 export function selectTitlePageScreenshots(
-  metadata: Pick<BookMetadata, 'pages'>,
+  metadata: Pick<BookMetadata, 'pages' | 'frontMatter'>,
   maxPages = 4
 ): string[] {
+  const fromFrontMatter = (metadata.frontMatter ?? [])
+    .map((f) => f.screenshot)
+    .filter((s): s is string => Boolean(s))
+  if (fromFrontMatter.length > 0) {
+    return fromFrontMatter.slice(0, Math.max(0, maxPages))
+  }
+
   const pages = metadata.pages ?? []
   return pages
     .slice(0, Math.max(0, maxPages))
@@ -37,7 +47,7 @@ export function selectTitlePageScreenshots(
 // author are printed on the page. Pure orchestration over an injected image
 // loader + extractor; the caller logs the returned warnings.
 export async function recoverMetaFromTitlePage(
-  metadata: Pick<BookMetadata, 'pages'>,
+  metadata: Pick<BookMetadata, 'pages' | 'frontMatter'>,
   loadImages: (paths: string[]) => Promise<Buffer[]>,
   extractor: TitlePageExtractor,
   opts: { maxPages?: number } = {}
