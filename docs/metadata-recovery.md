@@ -57,7 +57,7 @@ Each layer catches the previous layer's failure:
 | 1 | **Passive capture** | `extract-kindle-book.ts` `page.on('response')` | The happy path. |
 | 2 | **Cache-bust reload** | `forceReaderMetadataRefresh()` | Unregister the service worker + clear Cache Storage + disable the HTTP cache (CDP `Network.setCacheDisabled`), then reload so the reader issues its **own** authenticated request — no 403 — and the passive listener catches the 200. Cache is re-enabled afterward. **Preferred root-cause fix.** |
 | 3 | **Direct fetch** | `recover-book-metadata.ts` | Replay `startReading` + `metadataUrl` via in-page fetch, falling back to `page.request` for a cross-origin `metadataUrl`. |
-| 4 | **Title-page OCR** | `title-page-meta.ts`, invoked from `transcribe-book-content.ts` | When `meta.title` is missing, gpt-4o reads the title/author off the already-captured cover/title-page screenshots and backfills via `setBookMeta()`. **Account-independent (no Amazon API); needs OpenAI credits.** Runs on both the fresh and already-transcribed paths. |
+| 4 | **Title-page OCR** | `title-page-meta.ts`, invoked from `transcribe-book-content.ts` | When `meta.title` is missing, gpt-4o reads the title/author off the cover/title-page screenshots and backfills via `setBookMeta()`. **Account-independent; needs OpenAI credits.** ⚠️ **Only effective for PDF/EPUB today.** Kindle extraction starts at the first *page-numbered* TOC entry and skips front matter, so the cover/title page is never screenshotted (see Field Notes) — layer 4 then reads body pages and finds no title. |
 | 5 | **Out-dir fallback** | `resolveBookMeta()` in `book-meta.ts` | Exporters derive a title from the `<asin>-<title>` out-dir (or bare dir) and **warn** instead of asserting and dying. |
 | 6 | **Manual** | `set-book-meta.ts` CLI | `pnpm tsx src/set-book-meta.ts <asin> "<title>" "<author[,author2]>"` |
 
@@ -85,6 +85,27 @@ the out-dir name as the title.)
   - `src/__tests__/title-page-meta.test.ts`
   - `src/__tests__/book-meta.test.ts`
   - `src/__tests__/set-book-meta.test.ts`
+
+## Field notes (live runs)
+
+Observed across two accounts/books (`B0090RVGW0`, `B0BZ7QZQJ6`):
+
+- **The metadata API path is effectively dead for these accounts.** `startReading`
+  returns **HTTP 403** even on a cold profile and even via in-page fetch, and the
+  reader never surfaces `startReading`/`YJmetadata` to the passive listener — so
+  layers 1–3 do not recover anything here. Layer 2 (cache-bust) is still the best
+  shot in principle but did not change the outcome on these runs.
+- **Layer 4 can't help Kindle extractions yet** because the extractor begins at
+  the first page-numbered TOC entry (`firstPageTocItem` in
+  `extract-kindle-book.ts`). For a book whose front matter (Cover, Title Page,
+  Copyright) — and sometimes the first chapter — sits at *locations* before the
+  first *page*, those pages are never captured. The title-page image simply
+  isn't in `pages/`. To make layer 4 work for Kindle, extraction must also
+  capture the title page (e.g. navigate to the "Title Page" TOC entry / page 1
+  and screenshot it).
+- **Net:** on these accounts, `set-book-meta` (layer 6) is currently the only
+  reliable way to get a real Kindle title. Identify the book from its content/TOC
+  and set it manually.
 
 ## Logging gotcha
 
