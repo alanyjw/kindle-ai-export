@@ -5,24 +5,24 @@ import type { TocItem } from '../types'
 
 describe('parseTocItems', () => {
   it('regression: skips a stale cover stuck on the book’s last page', () => {
-    // Real failure (ASIN B000SELDB8, "Boundaries in Marriage"): another session
-    // left the book on the last page, Amazon’s "Most Recent Page Read" sync
-    // resumed there, and the cover — which renders no footer page indicator —
-    // reported the stale `page 254 of 254`. Picking the first positioned entry
-    // made the cover the content start, leaving the main loop 0 pages to read.
+    // Real failure mode: another session left the book on its last page,
+    // Amazon’s "Most Recent Page Read" sync resumed there, and the cover —
+    // which renders no footer page indicator — reported the stale
+    // `page 254 of 254`. Picking the first positioned entry made the cover the
+    // content start, leaving the main loop 0 pages to read.
     const tocItems: TocItem[] = [
       { title: 'Cover', page: 254, total: 254 }, // stale footer reading
       { title: 'Contents', location: 32, total: 3433 },
-      { title: 'A Tale of Two Couples', page: 7, total: 254 },
-      { title: 'Part 1: Understanding Boundaries', page: 14, total: 254 },
-      { title: "1. What's a Boundary, Anyway?", page: 15, total: 254 },
+      { title: 'Opening Section', page: 7, total: 254 },
+      { title: 'Part 1', page: 14, total: 254 },
+      { title: 'Chapter 1', page: 15, total: 254 },
       { title: 'Conclusion', page: 254, total: 254 }
     ]
 
     const parsed = parseTocItems(tocItems)
 
     expect(parsed.useLocationMode).toBe(false)
-    expect(parsed.firstPageTocItem.title).toBe('A Tale of Two Couples')
+    expect(parsed.firstPageTocItem.title).toBe('Opening Section')
     expect(parsed.firstContentPosition).toBe(7)
     // No recognised back-matter title, so the loop reads through to `total`.
     expect(parsed.afterLastContentPosition).toBeUndefined()

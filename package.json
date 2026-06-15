@@ -22,7 +22,8 @@
     "test:lint:fix": "eslint --fix .",
     "test:typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
-    "preinstall": "npx only-allow pnpm"
+    "preinstall": "npx only-allow pnpm",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@inquirer/prompts": "^7.0.0",

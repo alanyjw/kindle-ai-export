@@ -1,0 +1,3 @@
+#!/bin/sh
+# Block commits that stage book titles, PII, or secrets. See .githooks/scan-pii.mjs.
+exec node "$(dirname "$0")/scan-pii.mjs" staged

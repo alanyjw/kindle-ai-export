@@ -5,7 +5,7 @@ import prettier from 'eslint-config-prettier'
 
 export default [
   {
-    ignores: ['dist/**', 'out/**', 'node_modules/**']
+    ignores: ['dist/**', 'out/**', 'node_modules/**', '.githooks/**']
   },
 
   js.configs.recommended,

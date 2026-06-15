@@ -1,0 +1,3 @@
+#!/bin/sh
+# Block commit messages that mention book titles, PII, or secrets.
+exec node "$(dirname "$0")/scan-pii.mjs" message "$1"
