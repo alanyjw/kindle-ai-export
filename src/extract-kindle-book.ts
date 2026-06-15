@@ -11,6 +11,7 @@ import {
   type MetadataFetcher,
   recoverBookMetadata as recoverBookMetadataImpl
 } from './recover-book-metadata'
+import { type PageNav, parseTocItems, samePageNav } from './toc'
 import type { BookInfo, BookMeta, BookMetadata, PageChunk } from './types'
 import {
   assert,
@@ -38,12 +39,9 @@ const colors = {
   brightRed: '\u001B[1;31m'
 } as const
 
-interface PageNav {
-  page?: number
-  location?: number
-  total: number
-}
-
+// Browser-aware TOC item: the shared `PageNav` position fields plus the
+// Playwright `Locator` used to click the entry. `parseTocItems` is generic over
+// this richer type, so the locator passes through its result untouched.
 interface TocItem extends PageNav {
   title: string
   locator?: Locator
@@ -589,17 +587,41 @@ async function main() {
   const tocItems: Array<TocItem> = []
 
   console.warn(`initializing ${$tocItems.length} TOC items...`)
-  for (const tocItem of $tocItems) {
+
+  // Track the footer position across clicks so we can wait for the reader to
+  // actually navigate after each TOC click instead of trusting a fixed delay.
+  // A blind delay is unreliable on a cold reader: if Amazon's "Most Recent Page
+  // Read" sync resumed the book at a position from another session (often the
+  // *last* page if that's where it was last read), the footer can still show
+  // that stale position when getPageNav() runs, recording a bogus page for the
+  // TOC item — which then trips the end-of-book early-break below after a single
+  // item and leaves the whole walk (and extraction) empty.
+  let prevNav = initialPageNav
+  for (let i = 0; i < $tocItems.length; i++) {
+    const tocItem = $tocItems[i]!
     await tocItem.scrollIntoViewIfNeeded()
 
     const title = await tocItem.textContent()
     assert(title)
 
     await tocItem.click()
-    await delay(250)
 
-    const pageNav = await getPageNav()
+    // Wait for the footer to reflect the new position rather than a fixed delay.
+    // Adjacent TOC entries can legitimately map to the same position (e.g. two
+    // front-matter items), so fall back to whatever the footer shows once the
+    // timeout elapses instead of failing.
+    const settleTimeoutMs = 3000
+    const settleStartMs = Date.now()
+    let pageNav = await getPageNav()
+    while (
+      Date.now() - settleStartMs < settleTimeoutMs &&
+      samePageNav(pageNav, prevNav)
+    ) {
+      await delay(100)
+      pageNav = await getPageNav()
+    }
     assert(pageNav)
+    prevNav = pageNav
 
     tocItems.push({
       title,
@@ -609,11 +631,12 @@ async function main() {
 
     console.warn({ title, ...pageNav })
 
-    // if (pageNav.page !== undefined) {
-    //   break
-    // }
-
-    if (pageNav.page !== undefined && pageNav.page >= pageNav.total) {
+    // Stop once a TOC item lands on the final page — no point walking the
+    // remaining back matter. Skip this for the first item: a real book never
+    // has its first TOC entry on the last page, so an `i === 0` hit is a stale
+    // footer read, and breaking here would leave the walk with no content-start
+    // entry for the main loop.
+    if (i > 0 && pageNav.page !== undefined && pageNav.page >= pageNav.total) {
       break
     }
   }
@@ -1188,69 +1211,6 @@ function parsePageNav(text: string | null): PageNav | undefined {
 
       return { location, total }
     }
-  }
-}
-
-function parseTocItems(tocItems: TocItem[]) {
-  // Some Kindle books expose page numbers in the reader footer; reflowable
-  // text books only expose locations. Detect by majority: front matter (Cover,
-  // Title Page, etc.) often only reports location even in page-mode books, so
-  // we can't just inspect the first TOC item. Conversely, some location-only
-  // books carry one stray back-matter entry with a publisher page number from
-  // a separate pagination scheme. Prefer location mode only when locations
-  // strictly outnumber pages.
-  const pageCount = tocItems.filter((i) => i.page !== undefined).length
-  const locationCount = tocItems.filter((i) => i.location !== undefined).length
-  const useLocationMode = locationCount > pageCount
-
-  const positionOf = (item: TocItem): number | undefined =>
-    useLocationMode ? item.location : item.page
-
-  // Find the first TOC entry with the active position type — this is the
-  // start of the main book content (after title/TOC/copyright).
-  const firstPageTocItem = tocItems.find(
-    (item) => positionOf(item) !== undefined
-  )
-  assert(
-    firstPageTocItem,
-    `Unable to find first valid TOC item (location-mode: ${useLocationMode})`
-  )
-
-  // Try to find the first TOC entry AFTER the main book content (back matter:
-  // acknowledgements, about the author, etc).
-  const afterLastPageTocItem = tocItems.find((item) => {
-    const pos = positionOf(item)
-    if (pos === undefined) return false
-    if (item === firstPageTocItem) return false
-
-    const percentage = pos / item.total
-    if (percentage < 0.9) return false
-
-    if (/acknowledgements/i.test(item.title)) return true
-    if (/^discover more$/i.test(item.title)) return true
-    if (/^extras$/i.test(item.title)) return true
-    if (/about the author/i.test(item.title)) return true
-    if (/meet the author/i.test(item.title)) return true
-    if (/^also by /i.test(item.title)) return true
-    if (/^copyright$/i.test(item.title)) return true
-    if (/ teaser$/i.test(item.title)) return true
-    if (/ preview$/i.test(item.title)) return true
-    if (/^excerpt from/i.test(item.title)) return true
-    if (/^cast of characters$/i.test(item.title)) return true
-    if (/^timeline$/i.test(item.title)) return true
-    if (/^other titles/i.test(item.title)) return true
-
-    return false
-  })
-
-  return {
-    firstPageTocItem,
-    afterLastPageTocItem,
-    useLocationMode,
-    firstContentPosition: positionOf(firstPageTocItem)!,
-    afterLastContentPosition: afterLastPageTocItem
-      ? positionOf(afterLastPageTocItem)
-      : undefined
   }
 }
 
