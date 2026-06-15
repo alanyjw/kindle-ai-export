@@ -265,9 +265,12 @@ export async function exportBookMarkdown(
   const tocPositionOf = (item: { page?: number; location?: number }) =>
     useLocationMode ? item.location : item.page
 
-  // Count actual items that will be processed (have positions and can find content)
+  // Count actual items that will be processed (have positions and can find
+  // content). Iterate the full TOC — the final entry is a real content section
+  // (often the last chapter), so excluding it drops everything from its start
+  // page to the end of the book.
   let actualProcessableCount = 0
-  for (let i = 0; i < metadata.toc.length - 1; i++) {
+  for (let i = 0; i < metadata.toc.length; i++) {
     const tocItem = metadata.toc[i]!
     const pos = tocPositionOf(tocItem)
     if (pos === undefined) continue
@@ -296,13 +299,16 @@ ${metadata.toc
 
 ---`
 
-  for (let i = 0; i < metadata.toc.length - 1; i++) {
+  for (let i = 0; i < metadata.toc.length; i++) {
     const tocItem = metadata.toc[i]!
     const pos = tocPositionOf(tocItem)
     if (pos === undefined) continue
 
-    const nextTocItem = metadata.toc[i + 1]!
-    const nextPos = tocPositionOf(nextTocItem)
+    // The last TOC entry has no following item, so its section runs to the end
+    // of the content. Iterating only up to `length - 1` dropped this final
+    // section entirely (e.g. the last chapter + the book's conclusion).
+    const nextTocItem = metadata.toc[i + 1]
+    const nextPos = nextTocItem ? tocPositionOf(nextTocItem) : undefined
     const startIndex = content.findIndex((c) => c.page >= pos)
     const endIndex =
       nextPos !== undefined
