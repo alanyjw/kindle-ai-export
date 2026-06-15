@@ -13,12 +13,12 @@ function metaWith(
 describe('resolveBookMeta', () => {
   it('uses the captured title and authors when present', () => {
     const result = resolveBookMeta(
-      metaWith({ title: 'On Writing Well', authorList: ['William Zinsser'] }),
-      'out/B0090RVGW0-On Writing Well'
+      metaWith({ title: 'Example Book', authorList: ['Author Name'] }),
+      'out/ASIN000001-Example Book'
     )
     expect(result.synthesized).toBe(false)
-    expect(result.title).toBe('On Writing Well')
-    expect(result.authorList).toEqual(['William Zinsser'])
+    expect(result.title).toBe('Example Book')
+    expect(result.authorList).toEqual(['Author Name'])
     expect(result.warning).toBeUndefined()
   })
 
@@ -34,24 +34,24 @@ describe('resolveBookMeta', () => {
   it('falls back to the out-dir title suffix when meta is missing', () => {
     const result = resolveBookMeta(
       { meta: undefined as unknown as BookMetadata['meta'] },
-      'out/B0090RVGW0-On Writing Well'
+      'out/ASIN000001-Example Book'
     )
     expect(result.synthesized).toBe(true)
-    expect(result.title).toBe('On Writing Well')
+    expect(result.title).toBe('Example Book')
     expect(result.authorList).toEqual([])
     expect(result.warning).toContain('meta.title) is missing')
     // The warning should point at the recovery tool with the dir basename.
     expect(result.warning).toContain('src/set-book-meta.ts')
-    expect(result.warning).toContain('B0090RVGW0-On Writing Well')
+    expect(result.warning).toContain('ASIN000001-Example Book')
   })
 
   it('falls back to the bare dir name when there is no title suffix', () => {
     const result = resolveBookMeta(
       { meta: undefined as unknown as BookMetadata['meta'] },
-      'out/B0090RVGW0'
+      'out/ASIN000001'
     )
     expect(result.synthesized).toBe(true)
-    expect(result.title).toBe('B0090RVGW0')
+    expect(result.title).toBe('ASIN000001')
   })
 
   it('treats an empty/whitespace title as missing and synthesizes', () => {

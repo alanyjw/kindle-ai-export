@@ -67,7 +67,7 @@ If automated recovery didn't run (e.g. no OpenAI credits for layer 4), set the
 title/author directly:
 
 ```bash
-pnpm tsx src/set-book-meta.ts <asin> "On Writing Well" "William Zinsser"
+pnpm tsx src/set-book-meta.ts <asin> "Example Book" "Author Name"
 # or target an explicit out dir:
 pnpm tsx src/set-book-meta.ts out/<asin> "<title>" "<author[,author2]>"
 ```
@@ -88,7 +88,7 @@ the out-dir name as the title.)
 
 ## Field notes (live runs)
 
-Observed across two accounts/books (`B0090RVGW0`, `B0BZ7QZQJ6`):
+Observed across two accounts/books (`ASIN000001`, `ASIN000002`):
 
 - **The metadata API path is effectively dead for these accounts.** `startReading`
   returns **HTTP 403** even on a cold profile and even via in-page fetch, and the

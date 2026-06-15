@@ -80,8 +80,8 @@ describe('selectTitlePageScreenshots', () => {
 describe('recoverMetaFromTitlePage', () => {
   it('returns normalized title/authors from the extractor', async () => {
     const extractor = fakeExtractor({
-      title: '  On Writing Well  ',
-      authorList: [' William Zinsser ', '']
+      title: '  Example Book  ',
+      authorList: [' Author Name ', '']
     })
 
     const { meta, warnings } = await recoverMetaFromTitlePage(
@@ -90,8 +90,8 @@ describe('recoverMetaFromTitlePage', () => {
       extractor
     )
 
-    expect(meta.title).toBe('On Writing Well')
-    expect(meta.authorList).toEqual(['William Zinsser'])
+    expect(meta.title).toBe('Example Book')
+    expect(meta.authorList).toEqual(['Author Name'])
     expect(warnings).toEqual([])
     // The extractor was handed the loaded image buffers.
     expect(extractor.received[0]).toHaveLength(2)
@@ -161,9 +161,9 @@ describe('parseTitlePageJson', () => {
   it('parses a plain JSON object', () => {
     expect(
       parseTitlePageJson(
-        '{"title":"On Writing Well","authorList":["William Zinsser"]}'
+        '{"title":"Example Book","authorList":["Author Name"]}'
       )
-    ).toEqual({ title: 'On Writing Well', authorList: ['William Zinsser'] })
+    ).toEqual({ title: 'Example Book', authorList: ['Author Name'] })
   })
 
   it('parses JSON wrapped in a ```json fence with prose around it', () => {

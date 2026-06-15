@@ -9,7 +9,7 @@ import {
   recoverBookMetadata
 } from '../recover-book-metadata'
 
-const ASIN = 'B0090RVGW0'
+const ASIN = 'ASIN000001'
 const START_URL = buildStartReadingUrl(ASIN)
 const METADATA_URL = 'https://m.media-amazon.com/images/book/YJmetadata.jsonp'
 

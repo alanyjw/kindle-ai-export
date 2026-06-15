@@ -36,14 +36,12 @@ describe('setBookMeta', () => {
       pages: [{ index: 0, page: 1, total: 100, screenshot: 'a.png' }]
     })
 
-    const written = await setBookMeta(tmpDir, 'On Writing Well', [
-      'William Zinsser'
-    ])
+    const written = await setBookMeta(tmpDir, 'Example Book', ['Author Name'])
     expect(written).toBe(path.join(tmpDir, 'metadata.json'))
 
     const updated = await readMetadata()
-    expect(updated.meta.title).toBe('On Writing Well')
-    expect(updated.meta.authorList).toEqual(['William Zinsser'])
+    expect(updated.meta.title).toBe('Example Book')
+    expect(updated.meta.authorList).toEqual(['Author Name'])
     // Existing data is untouched.
     expect(updated.toc).toHaveLength(1)
     expect(updated.pages).toHaveLength(1)
@@ -52,14 +50,14 @@ describe('setBookMeta', () => {
 
   it('merges into a partial pre-existing meta rather than dropping it', async () => {
     await writeMetadata({
-      meta: { asin: 'B0090RVGW0', language: 'english' },
+      meta: { asin: 'ASIN000001', language: 'english' },
       toc: [{ title: 'Cover', total: 1 }]
     })
 
     await setBookMeta(tmpDir, 'My Title', ['Author One', 'Author Two'])
 
     const updated = await readMetadata()
-    expect(updated.meta.asin).toBe('B0090RVGW0')
+    expect(updated.meta.asin).toBe('ASIN000001')
     expect(updated.meta.language).toBe('english')
     expect(updated.meta.title).toBe('My Title')
     expect(updated.meta.authorList).toEqual(['Author One', 'Author Two'])

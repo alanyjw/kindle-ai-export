@@ -14,7 +14,7 @@ import { getEnv, reportFatalError, resolveOutDir } from './utils'
 //
 // Usage:
 //   pnpm tsx src/set-book-meta.ts <asin|outDir> "<title>" "<author[,author2]>"
-//   pnpm tsx src/set-book-meta.ts "On Writing Well" "William Zinsser"   # uses ASIN env
+//   pnpm tsx src/set-book-meta.ts "Example Book" "Author Name"   # uses ASIN env
 export async function setBookMeta(
   outDir: string,
   title: string,
