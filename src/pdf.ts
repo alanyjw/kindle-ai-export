@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import type { PdfOutlineNode } from './pdf-outline'
+
 type PdfDocument = any
 
 const pdfDocCache = new Map<string, Promise<PdfDocument>>()
@@ -58,6 +60,48 @@ export async function extractPdfPageText(
     .trim()
 }
 
+/**
+ * Read the PDF's embedded outline (bookmarks), resolving each entry's
+ * destination to a 1-based page number.
+ *
+ * Most published ebooks ship a complete outline — it's the only trustworthy
+ * table of contents available from a PDF, since the extracted text layer
+ * carries no heading structure at all. Entries whose destination can't be
+ * resolved are returned with `page: undefined` rather than dropped, so callers
+ * can still descend into their children.
+ */
+export async function getPdfOutline(
+  pdfPath: string
+): Promise<PdfOutlineNode[]> {
+  const doc = await loadPdfDocument(pdfPath)
+  const rawOutline = await doc.getOutline().catch(() => null)
+  if (!Array.isArray(rawOutline)) return []
+
+  const pageOf = async (dest: any): Promise<number | undefined> => {
+    try {
+      const resolved =
+        typeof dest === 'string' ? await doc.getDestination(dest) : dest
+      if (!Array.isArray(resolved) || resolved.length === 0) return undefined
+      const pageIndex = await doc.getPageIndex(resolved[0])
+      return typeof pageIndex === 'number' ? pageIndex + 1 : undefined
+    } catch {
+      // A malformed or dangling destination shouldn't sink the whole outline.
+      return undefined
+    }
+  }
+
+  const convert = async (nodes: any[]): Promise<PdfOutlineNode[]> =>
+    Promise.all(
+      nodes.map(async (node) => ({
+        title: typeof node?.title === 'string' ? node.title : '',
+        page: await pageOf(node?.dest),
+        items: Array.isArray(node?.items) ? await convert(node.items) : []
+      }))
+    )
+
+  return convert(rawOutline)
+}
+
 export async function renderPdfPageToPngBuffer(
   pdfPath: string,
   pageNumber: number
@@ -83,7 +127,24 @@ export async function renderPdfPageToPngBuffer(
   return canvas.toBuffer('image/png')
 }
 
+/**
+ * Release a cached PDF document.
+ *
+ * `loadPdfDocument` memoizes by path and never evicts, which is fine for the
+ * single-book scripts but unbounded when a batch job walks a whole library —
+ * each entry pins the file bytes plus pdfjs' parsed structures. Callers that
+ * loop over many PDFs should close each one when done.
+ */
 export async function closePdfRenderer(pdfPath: string): Promise<void> {
-  // Kept for API compatibility with callers; Node rendering doesn't hold external resources.
-  void pdfPath
+  const absPath = path.resolve(pdfPath)
+  const cached = pdfDocCache.get(absPath)
+  if (!cached) return
+
+  pdfDocCache.delete(absPath)
+  try {
+    const doc = await cached
+    await doc?.destroy?.()
+  } catch {
+    // A document that failed to load has nothing to release.
+  }
 }

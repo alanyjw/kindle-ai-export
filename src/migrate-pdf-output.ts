@@ -3,31 +3,9 @@ import 'dotenv/config'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
+import { stripOcrBoilerplate } from './ocr-boilerplate'
 import type { ContentChunk } from './types'
 import { assert, sanitizeDirname } from './utils'
-
-function stripOcrBoilerplate(text: string): string {
-  const boilerplateLineMatchers: RegExp[] = [
-    /i['’]m sorry.*(image|uploaded|visible)/i,
-    /\bi (can|can't|cannot)\b.*\b(help|assist)\b.*\b(image|uploaded)\b/i,
-    /\bi['’]m unable to\b.*\b(help|view|analyze)\b.*\b(image|uploaded)\b/i,
-    /\bi can'?t identify\b.*\bpeople\b.*\bimages?\b/i,
-    /could you please (try again|provide|describe)/i,
-    /i (can|can't|cannot) (identify|provide information about).*people in images/i
-  ]
-
-  const lines = text.replaceAll('\r\n', '\n').split('\n')
-  const kept = lines.filter((line) => {
-    const t = line.trim()
-    if (!t) return true
-    return !boilerplateLineMatchers.some((re) => re.test(t))
-  })
-
-  return kept
-    .join('\n')
-    .replaceAll(/\n{3,}/g, '\n\n')
-    .trim()
-}
 
 function formatPdfTextToMarkdown(body: string): string {
   const lines = body.replaceAll('\r\n', '\n').split('\n')

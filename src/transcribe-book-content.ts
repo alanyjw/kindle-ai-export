@@ -16,9 +16,11 @@ import { isBlankPageFromPng } from './image'
 import {
   closePdfRenderer,
   extractPdfPageText,
+  getPdfOutline,
   getPdfPageCount,
   renderPdfPageToPngBuffer
 } from './pdf'
+import { buildPdfMetadata } from './pdf-metadata'
 import {
   assert,
   createProgressBar,
@@ -502,6 +504,43 @@ async function backfillTitleFromTitlePage(outDir: string): Promise<void> {
   }
 }
 
+// Derive metadata.json for a PDF from its embedded outline (bookmarks). A
+// PDF's text layer has no heading structure, so without this the markdown
+// export has no way to know where chapters start and emits a single wall of
+// text. Books with no outline simply skip this — the exporter still falls back
+// to its text-shape heuristic.
+async function writePdfMetadata(
+  outDir: string,
+  pdfPath: string
+): Promise<void> {
+  try {
+    const metadata = await buildPdfMetadata(pdfPath, {
+      getPageCount: getPdfPageCount,
+      getOutline: getPdfOutline
+    })
+
+    if (!metadata) {
+      console.warn(
+        'No embedded outline found in this PDF — markdown export will fall back to detecting headings from the text.'
+      )
+      return
+    }
+
+    await fs.writeFile(
+      path.join(outDir, 'metadata.json'),
+      JSON.stringify(metadata, null, 2)
+    )
+    console.warn(
+      `Wrote metadata.json with ${metadata.toc.length} outline entries.`
+    )
+  } catch (err: any) {
+    // Metadata is an enhancement; never fail a transcription over it.
+    console.warn('failed to derive PDF metadata from the outline', {
+      error: err?.message || err
+    })
+  }
+}
+
 async function main() {
   const arg = process.argv[2]
   const isPdfMode = Boolean(arg && /\.pdf$/i.test(arg))
@@ -678,6 +717,9 @@ async function main() {
         )
       )
       console.log(JSON.stringify(existingContent, null, 2))
+      // Books transcribed before outline support existed have no metadata.json;
+      // backfill it here so they get chapter headings without a re-transcribe.
+      await writePdfMetadata(outDir, pdfPath)
       return
     }
 
@@ -840,8 +882,10 @@ async function main() {
   progressBarNewline()
 
   // Backfill the book title from the title page if extraction couldn't capture
-  // it from Amazon (Kindle mode only; PDF mode has no metadata.json).
-  if (!pdfPath) {
+  // it from Amazon (Kindle mode only; PDF metadata has no `meta` to fill).
+  if (pdfPath) {
+    await writePdfMetadata(outDir, pdfPath)
+  } else {
     await backfillTitleFromTitlePage(outDir)
   }
 

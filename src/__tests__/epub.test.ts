@@ -168,8 +168,8 @@ describe('extractEpub — fixture A (single-file + NCX)', () => {
     expect(metadata.toc.length).toBe(6)
     expect(metadata.toc.at(-1)!.page).toBeUndefined()
     expect(metadata.pages.length).toBe(5)
-    expect(metadata.meta.title).toBe('Fixture A Book')
-    expect(metadata.meta.authorList).toEqual(['Ada Author'])
+    expect(metadata.meta!.title).toBe('Fixture A Book')
+    expect(metadata.meta!.authorList).toEqual(['Ada Author'])
   })
 
   it('extracts the image and references it; unwraps the footnote link', async () => {
@@ -258,7 +258,7 @@ describe('extractEpub — front-matter cleanup', () => {
     const out = await tmpOut()
     const { metadata } = await extractEpub(epubPath, out)
 
-    expect(metadata.meta.authorList).toEqual(['Jane Doe']) // no trailing ;
+    expect(metadata.meta!.authorList).toEqual(['Jane Doe']) // no trailing ;
     const titles = metadata.toc.map((t) => t.title)
     // cover → humanized label, title page → NOT the book title, chapter kept
     expect(titles.slice(0, 3)).toEqual(['Cover', 'Titlepage', 'Chapter 1'])
@@ -318,6 +318,6 @@ describe('extractEpub — fixture B (nav-only EPUB3)', () => {
       'Part One',
       'Part Two'
     ])
-    expect(metadata.meta.authorList).toEqual(['Bee Writer'])
+    expect(metadata.meta!.authorList).toEqual(['Bee Writer'])
   })
 })

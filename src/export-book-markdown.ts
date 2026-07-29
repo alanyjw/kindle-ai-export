@@ -5,6 +5,8 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { resolveBookMeta } from './book-meta'
+import { stripOcrBoilerplate } from './ocr-boilerplate'
+import { cleanSectionOpening } from './pdf-drop-cap'
 import type { BookMetadata, ContentChunk } from './types'
 import {
   assert,
@@ -79,30 +81,20 @@ function joinChunksDedupingOverlap(
   return out.join(separator)
 }
 
-function stripOcrBoilerplate(text: string): string {
-  const boilerplateLineMatchers: RegExp[] = [
-    /i['’]m sorry.*(image|uploaded|visible)/i,
-    /\bi (can|can't|cannot)\b.*\b(help|assist)\b.*\b(image|uploaded)\b/i,
-    /\bi['’]m unable to\b.*\b(help|view|analyze)\b.*\b(image|uploaded)\b/i,
-    /\bi can'?t identify\b.*\bpeople\b.*\bimages?\b/i,
-    /could you please (try again|provide|describe)/i,
-    /i (can|can't|cannot) (identify|provide information about).*people in images/i
-  ]
-
-  const lines = text.replaceAll('\r\n', '\n').split('\n')
-  const kept = lines.filter((line) => {
-    const t = line.trim()
-    if (!t) return true
-    return !boilerplateLineMatchers.some((re) => re.test(t))
-  })
-
-  return kept
-    .join('\n')
-    .replaceAll(/\n{3,}/g, '\n\n')
-    .trim()
+export interface FormatPdfTextOptions {
+  // Detect `Part …` / `Chapter N …` lines and promote them to headings. Only
+  // useful as a fallback: it relies on the heading sitting at the start of its
+  // own line, which embedded PDF text (one line per page) never satisfies.
+  // When the PDF's own outline supplies the headings, leave this off so the
+  // same heading isn't emitted twice.
+  detectHeadings?: boolean
 }
 
-function formatPdfTextToMarkdown(body: string): string {
+function formatPdfTextToMarkdown(
+  body: string,
+  opts: FormatPdfTextOptions = {}
+): string {
+  const { detectHeadings = true } = opts
   const lines = body.replaceAll('\r\n', '\n').split('\n')
   const out: string[] = []
 
@@ -144,7 +136,7 @@ function formatPdfTextToMarkdown(body: string): string {
     const cleanedLine = stripOcrBoilerplate(line)
     if (!cleanedLine) continue
 
-    if (/^part\b/i.test(cleanedLine)) {
+    if (detectHeadings && /^part\b/i.test(cleanedLine)) {
       const { heading, rest } = splitHeadingAndRest(cleanedLine, 'part')
       pushBlank()
       out.push(`## ${heading}`)
@@ -153,7 +145,7 @@ function formatPdfTextToMarkdown(body: string): string {
       continue
     }
 
-    if (/^chapter\s+\d+\b/i.test(cleanedLine)) {
+    if (detectHeadings && /^chapter\s+\d+\b/i.test(cleanedLine)) {
       const { heading, rest } = splitHeadingAndRest(cleanedLine, 'chapter')
       pushBlank()
       out.push(`## ${heading}`)
@@ -170,6 +162,39 @@ function formatPdfTextToMarkdown(body: string): string {
     .join('\n')
     .replaceAll(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+// Markdown heading prefix for a TOC entry. The book title owns `#`, so a
+// top-level entry (level 0) is `##` and its chapters are `###`. Clamped at
+// `######`, the deepest heading markdown defines.
+function headingPrefix(level: number | undefined): string {
+  return '#'.repeat(Math.min(6, 2 + Math.max(0, level ?? 0)))
+}
+
+function anchorFor(title: string): string {
+  return title
+    .toLowerCase()
+    .replaceAll(/[^\da-z]+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+// Render one PDF section: its chunks joined page-by-page, with the section's
+// echoed heading and split drop cap repaired at the opening.
+function renderPdfSectionBody(
+  chunks: ReadonlyArray<ContentChunk>,
+  title?: string
+): string {
+  const cleaned = chunks.map((chunk, i) => {
+    const text = stripOcrBoilerplate(chunk.text)
+    return {
+      text: i === 0 && title ? cleanSectionOpening(text, title) : text
+    }
+  })
+
+  // Blank-line separator between pages: embedded PDF text arrives as one line
+  // per page, so page boundaries are the only paragraph breaks available.
+  const body = joinChunksDedupingOverlap(cleaned, '\n\n')
+  return formatPdfTextToMarkdown(body, { detectHeadings: !title })
 }
 
 export interface ExportBookMarkdownOptions {
@@ -205,42 +230,99 @@ export async function exportBookMarkdown(
   const metadataPath = path.join(outDir, 'metadata.json')
   const hasMetadata = await fileExists(metadataPath)
 
-  // PDF / content-only mode (no metadata.json)
-  if (!hasMetadata) {
+  const metadata = hasMetadata
+    ? (JSON.parse(await fs.readFile(metadataPath, 'utf8')) as BookMetadata)
+    : undefined
+
+  // PDF mode. Uses page-separated joining (embedded PDF text is one line per
+  // page, so page breaks are the only paragraph structure available) rather
+  // than the Kindle path's space-joining, which would collapse a whole chapter
+  // into a single paragraph. Sections come from the PDF's embedded outline
+  // when metadata.json carries one; otherwise the whole book is one blob and
+  // headings fall back to text-shape detection.
+  if (!hasMetadata || metadata?.source === 'pdf') {
     const title = pdfBasename || path.basename(outDir)
     const safeTitle = sanitizeDirname(title)
 
     const sorted = [...content].sort(
       (a, b) => a.page - b.page || a.index - b.index
     )
+    const toc = (metadata?.toc ?? []).filter((t) => t.page !== undefined)
 
-    const bar = createProgressBar(sorted.length)
+    const bar = createProgressBar(toc.length || sorted.length)
 
-    const cleaned = sorted.map((chunk) => {
-      bar.tick(1)
-      return { text: stripOcrBoilerplate(chunk.text) }
-    })
-    const body = joinChunksDedupingOverlap(cleaned, '\n\n')
+    const sections: string[] = []
+
+    if (toc.length === 0) {
+      const body = renderPdfSectionBody(sorted)
+      bar.tick(sorted.length)
+      if (body) sections.push(body)
+    } else {
+      const startIndexOf = (page: number) =>
+        sorted.findIndex((c) => c.page >= page)
+
+      // Anything before the first outline entry (a cover page the outline
+      // skips, say) would otherwise be silently dropped.
+      const firstStart = startIndexOf(toc[0]!.page!)
+      if (firstStart > 0) {
+        const preamble = renderPdfSectionBody(sorted.slice(0, firstStart))
+        if (preamble) sections.push(preamble)
+      }
+
+      for (const [i, tocItem] of toc.entries()) {
+        const startIndex = startIndexOf(tocItem.page!)
+        if (startIndex === -1) continue
+
+        const nextPage = toc[i + 1]?.page
+        const nextIndex =
+          nextPage === undefined ? sorted.length : startIndexOf(nextPage)
+        const endIndex =
+          nextIndex === -1 ? sorted.length : Math.max(startIndex, nextIndex)
+
+        const body = renderPdfSectionBody(
+          sorted.slice(startIndex, endIndex),
+          tocItem.title
+        )
+
+        sections.push(
+          body
+            ? `${headingPrefix(tocItem.level)} ${tocItem.title}\n\n${body}`
+            : `${headingPrefix(tocItem.level)} ${tocItem.title}`
+        )
+        bar.tick(1)
+      }
+    }
 
     progressBarNewline()
 
-    const formattedBody = formatPdfTextToMarkdown(body)
-    const output = `# ${title}\n\n${formattedBody}\n`
+    const tocBlock =
+      toc.length === 0
+        ? ''
+        : `## Table of Contents\n\n${toc
+            .map(
+              (tocItem) =>
+                `${'  '.repeat(Math.max(0, tocItem.level ?? 0))}- [${tocItem.title}](#${anchorFor(tocItem.title)})`
+            )
+            .join('\n')}\n\n---\n\n`
+
+    const output = `# ${title}\n\n${tocBlock}${sections.join('\n\n')}\n`
     const markdownPath = path.join(outDir, `${safeTitle}.md`)
     await fs.writeFile(markdownPath, output)
     console.log(`Export complete. Wrote markdown to: ${markdownPath}`)
     console.log(`Pages processed: ${sorted.length}`)
+    if (toc.length > 0) {
+      console.log(`TOC sections processed: ${toc.length}`)
+    }
     return {
       markdownPath,
       mode: 'content-only',
-      pagesProcessed: sorted.length
+      pagesProcessed: sorted.length,
+      ...(toc.length > 0 ? { sectionsProcessed: toc.length } : {})
     }
   }
 
   // Kindle mode (existing)
-  const metadata = JSON.parse(
-    await fs.readFile(metadataPath, 'utf8')
-  ) as BookMetadata
+  assert(metadata, 'invalid book metadata')
   assert(metadata.toc?.length, 'invalid book metadata: missing toc')
 
   // Degrade gracefully when `meta` is missing (e.g. Amazon 403'd the reader

@@ -10,6 +10,9 @@ export interface TocItem {
   page?: number
   location?: number
   total: number
+  // Nesting depth in the source's table of contents (0 = top level). Only the
+  // PDF outline currently reports it; absent means "top level".
+  level?: number
 }
 
 export interface PageChunk {
@@ -75,8 +78,14 @@ export interface FrontMatterShot {
 }
 
 export interface BookMetadata {
-  info: BookInfo
-  meta: BookMeta
+  // `info`/`meta` come from Amazon's reader APIs and can legitimately be
+  // absent: the PDF pipeline has no such APIs at all, and the Kindle one can
+  // be 403'd. Exporters degrade via `resolveBookMeta()` rather than failing.
+  info?: BookInfo
+  meta?: BookMeta
+  // Which pipeline produced this metadata. Absent means Kindle, the original
+  // (and still default) source.
+  source?: 'pdf' | 'epub'
   toc: TocItem[]
   pages: PageChunk[]
   // Front-matter page screenshots (Title Page, Cover, …) captured for metadata
