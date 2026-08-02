@@ -214,11 +214,11 @@ If `checkPreflight` returns a non-empty list, `book.ts` prints every unmet requi
 
 ```ts
 export interface BookSteps {
-  extractKindleBook: (opts: { asin: string; useFileLogger: boolean }) => Promise<unknown>
+  extractKindleBook: (opts: { asin: string; useFileLogger: boolean }) => Promise<{ outDir: string }>
   transcribeBookContent: (target: BookTarget, opts: { useFileLogger: boolean }) => Promise<unknown>
   exportBookMarkdown: (opts: ExportBookMarkdownOptions) => Promise<unknown>
-  exportBookPdf: (opts: { outDir: string; useFileLogger: boolean }) => Promise<unknown>
-  exportBookAudio: (opts: { outDir: string; useFileLogger: boolean }) => Promise<unknown>
+  exportBookPdf: (opts: { outDir: string }) => Promise<unknown>
+  exportBookAudio: (opts: { outDir: string }) => Promise<unknown>
 }
 
 export async function runBook(
@@ -230,11 +230,21 @@ export async function runBook(
 
 `runBook` takes its steps as an injected dependency, so the orchestration sequence is testable without touching a browser, the OpenAI API, or the filesystem. This matches the pattern already used by `recover-book-metadata.ts` (injectable fetcher), `title-page-meta.ts` (injectable extractor + image loader), and `pdf-metadata.ts` (injectable PDF source).
 
+`book.ts` builds the default `BookSteps` with **dynamic `import()` inside each thunk**, not top-level imports. `extract-kindle-book.ts` pulls in Playwright and `export-book-audio.ts` pulls in `fluent-ffmpeg` + `unrealspeech-api`; loading those eagerly would tax every run, including a plain PDF-to-markdown one that touches neither. `extract-kindle-book.ts:66` already uses this dynamic-import idiom internally.
+
+### Extraction renames the out directory
+
+`extract-kindle-book.ts:645-670` renames `out/<asin>` to `out/<asin>-<sanitizeDirname(title)>` once the book title is known, reassigning its local `outDir`. The directory `resolveBookTarget()` computed *before* extraction is therefore stale afterward.
+
+`extractKindleBook()` consequently **returns its final `{ outDir }`**, and `runBook` threads that value into every downstream step rather than reusing the pre-extraction one. Getting this wrong would make a first-ever Kindle export transcribe into `out/<asin>` while the screenshots live in `out/<asin>-<title>`.
+
+The shared log file is unaffected: `fs.rename` moves the whole directory including `logs/`, and the already-open `WriteStream` keeps writing to the same inode at its new path.
+
 ### Logging
 
-`book.ts` calls `setupTimestampedLogger(outDir)` **exactly once**, immediately after resolving the target, then passes `useFileLogger: false` to every step. Without this, each step installs its own logger and a single run scatters output across three to five files in `out/<dir>/logs/`.
+`book.ts` calls `setupTimestampedLogger(outDir)` **exactly once**, immediately after resolving the target, then passes `useFileLogger: false` to the steps that accept it. Without this, each step installs its own logger and a single run scatters output across several files in `out/<dir>/logs/`.
 
-`exportBookMarkdown` already exposes this option (`export-book-markdown.ts:200-207`); the other four step functions gain the same option with the same default (`true`, preserving standalone behavior).
+Only three scripts install a logger today — `export-book-markdown.ts`, `extract-kindle-book.ts`, and `transcribe-book-content.ts`. `export-book-pdf.ts` and `export-book-audio.ts` never call `setupTimestampedLogger`, so their step functions take **no `useFileLogger` option**; adding one would mean giving them file logging they don't currently have, changing their standalone output. `exportBookMarkdown` already exposes the option (`export-book-markdown.ts:200-207`); `extractKindleBook` and `transcribeBookContent` gain it with the same default (`true`, preserving standalone behavior).
 
 The 2FA prompt in `extract-kindle-book.ts:449` uses `@inquirer/prompts`, which writes to stdout directly rather than through `console.*`, so it remains visible under the shared file logger. No change needed.
 
@@ -242,15 +252,15 @@ The 2FA prompt in `extract-kindle-book.ts:449` uses `@inquirer/prompts`, which w
 
 ## Refactors to existing scripts
 
-Each script keeps its `main()` and its CLI behavior. Two of them are missing the entry guard that `transcribe-book-content.ts:910` and `export-book-markdown.ts:458` already have, and gain it — otherwise importing them from `book.ts` would execute a full export at import time.
+Each script keeps its `main()` and its CLI behavior. **Three** of them are missing the entry guard that `transcribe-book-content.ts:910` and `export-book-markdown.ts:458` already have, and gain it — otherwise importing them from `book.ts` would run a full extraction or export at import time.
 
 | File | Change |
 |---|---|
-| `export-book-markdown.ts` | none — `exportBookMarkdown()` (`:216`) is consumed as-is |
+| `export-book-markdown.ts` | `exportBookMarkdown()` (`:216`) is consumed as-is; `main()` switches to `resolveBookTarget` |
 | `transcribe-book-content.ts` | export `transcribeBookContent(target, opts)`; `main()` becomes arg-parsing + a call to it |
-| `export-book-pdf.ts` | extract `exportBookPdf({ outDir, useFileLogger })`; **add entry guard** (currently `await main()` unguarded at `:133`) |
-| `export-book-audio.ts` | extract `exportBookAudio({ outDir, useFileLogger })`; **add entry guard** (currently `await main()` unguarded at `:397`) |
-| `extract-kindle-book.ts` | export `extractKindleBook({ asin, force })`; `main()` becomes env-reading + a call to it |
+| `export-book-pdf.ts` | extract `exportBookPdf({ outDir })`; **add entry guard** (currently `await main()` unguarded at `:133`) |
+| `export-book-audio.ts` | extract `exportBookAudio({ outDir })`; **add entry guard** (currently `await main()` unguarded at `:397`) |
+| `extract-kindle-book.ts` | export `extractKindleBook({ asin, useFileLogger })` returning `{ outDir }`; **add entry guard** (currently `await main()` unguarded at `:1217`) |
 | `package.json` | add `"book": "tsx src/book.ts"` |
 
 ### Side effect: audiobooks for PDF and EPUB books
@@ -328,8 +338,9 @@ Three pure units plus `runBook`, tested directly with Vitest in `src/__tests__/`
 - no flags → markdown only
 - `--pdf` → markdown then PDF, in that order
 - `--all` → markdown, PDF, audio, in that order
-- a throwing `transcribeBookContent` → no exporter is called and the error propagates
-- every step receives `useFileLogger: false`
+- a throwing `transcribeBookContent` → no exporter is called and the error propagates, tagged `Transcription failed`
+- a `kindle` target whose `extractKindleBook` returns a **renamed** `outDir` → transcribe and every exporter receive the renamed directory, not the pre-extraction one
+- every step that accepts `useFileLogger` receives `false`
 
 The five refactored scripts get no new tests. Their behavior is unchanged and the existing suite covers them; `pnpm test` (format, lint, typecheck, unit) must stay green.
 
