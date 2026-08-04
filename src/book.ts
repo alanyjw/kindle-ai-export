@@ -175,13 +175,28 @@ async function probe(
   }
 }
 
-async function main() {
+// Usage errors — an unknown flag, a missing input — are not pipeline
+// failures: nothing has run yet. Report the message alone, without
+// reportFatalError's stack trace or its "Book pipeline failed" framing.
+function reportUsageError(err: unknown): never {
+  const message = err instanceof Error ? err.message : String(err)
+  process.stderr.write(`\n❌ ${message}\n`)
+  process.exit(1)
+}
+
+async function main(): Promise<void> {
   const [input, ...flagArgs] = process.argv.slice(2)
 
-  // Flags parse first so `pnpm book --pfd x.pdf` reports the typo rather than
-  // trying to classify "--pfd" as an input.
-  const flags = parseBookFlags(flagArgs)
-  const target = await resolveBookTarget(input)
+  let flags: BookFlags
+  let target: BookTarget
+  try {
+    // Flags parse first so `pnpm book --pfd x.pdf` reports the typo rather
+    // than trying to classify "--pfd" as an input.
+    flags = parseBookFlags(flagArgs)
+    target = await resolveBookTarget(input)
+  } catch (err) {
+    reportUsageError(err)
+  }
 
   // Set FORCE for the whole process so each step's existing getEnv('FORCE')
   // check sees it, rather than threading a parameter through five call sites.
@@ -196,9 +211,12 @@ async function main() {
     await probe(target, flags)
   )
   if (problems.length > 0) {
-    reportFatalError(
-      'Preflight failed',
-      problems.map((p) => `\n  - ${p}`).join('')
+    // Also not a pipeline failure — nothing has run yet — so report directly
+    // rather than through reportFatalError (which would stack-trace a plain
+    // string and glue "Preflight failed: " onto a message that already
+    // starts with its own newline).
+    process.stderr.write(
+      `\n❌ Preflight failed:\n${problems.map((p) => `  - ${p}\n`).join('')}`
     )
     process.exit(1)
   }
