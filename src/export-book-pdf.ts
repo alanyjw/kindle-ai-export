@@ -124,7 +124,9 @@ export async function exportBookPdf(
 async function main() {
   // `?? getEnv('ASIN')` preserves this script's historical no-argument
   // behavior of falling back to ASIN from .env.
-  const target = await resolveBookTarget(process.argv[2] ?? getEnv('ASIN'))
+  const arg = process.argv[2] ?? getEnv('ASIN')
+  assert(arg, 'ASIN is required')
+  const target = await resolveBookTarget(arg)
   await exportBookPdf({ outDir: target.outDir })
 }
 
