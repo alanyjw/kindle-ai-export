@@ -7,6 +7,8 @@ import { pathToFileURL } from 'node:url'
 import { OpenAIClient } from 'openai-fetch'
 import pMap from 'p-map'
 
+import type { BookTarget } from './book-input'
+import { resolveBookTarget } from './book-input'
 import { setBookMeta } from './set-book-meta'
 import { createOpenAITitlePageExtractor } from './title-page-extractor-openai'
 import { recoverMetaFromTitlePage } from './title-page-meta'
@@ -28,8 +30,6 @@ import {
   parseScreenshotFilename,
   progressBarNewline,
   reportFatalError,
-  resolveOutDir,
-  sanitizeDirname,
   setupTimestampedLogger
 } from './utils'
 import { verifyBookContent } from './verify-book-content'
@@ -541,21 +541,28 @@ async function writePdfMetadata(
   }
 }
 
-async function main() {
-  const arg = process.argv[2]
-  const isPdfMode = Boolean(arg && /\.pdf$/i.test(arg))
-  const isEpubMode = Boolean(arg && /\.epub$/i.test(arg))
+export interface TranscribeOptions {
+  // When true (default), hijacks console output to a timestamped log file in
+  // `<outDir>/logs/`. `book.ts` passes false because it installs one shared
+  // logger for the whole pipeline run.
+  useFileLogger?: boolean
+}
+
+export async function transcribeBookContent(
+  target: BookTarget,
+  opts: TranscribeOptions = {}
+): Promise<void> {
+  const { useFileLogger = true } = opts
 
   // EPUB: parse the container directly (no OpenAI/vision). Emits both
   // content.json and metadata.json so the existing exporters render unchanged.
-  if (isEpubMode) {
-    const epubPath = path.resolve(arg!)
-    const base = sanitizeDirname(
-      path.basename(epubPath, path.extname(epubPath))
-    )
-    const outDir = path.join('out', base)
+  if (target.kind === 'epub') {
+    const epubPath = target.sourcePath
+    const outDir = target.outDir
     await fs.mkdir(outDir, { recursive: true })
-    await setupTimestampedLogger(outDir)
+    if (useFileLogger) {
+      await setupTimestampedLogger(outDir)
+    }
 
     const blankMarker = getEnv('TRANSCRIBE_BLANK_MARKER') || '[BLANK_PAGE]'
     const { content, metadata } = await extractEpub(
@@ -583,21 +590,15 @@ async function main() {
     return
   }
 
-  const pdfPath = isPdfMode ? path.resolve(arg!) : undefined
+  const pdfPath = target.kind === 'pdf' ? target.sourcePath : undefined
 
-  let outDir: string
+  const outDir = target.outDir
   let pageScreenshotsDir: string | undefined
   let pageScreenshots: string[] = []
 
   if (pdfPath) {
-    const base = sanitizeDirname(path.basename(pdfPath, path.extname(pdfPath)))
-    outDir = path.join('out', base)
     await fs.mkdir(outDir, { recursive: true })
   } else {
-    const asin = getEnv('ASIN')
-    assert(asin, 'ASIN is required')
-
-    outDir = await resolveOutDir(asin)
     pageScreenshotsDir = path.join(outDir, 'pages')
     // fs.readdir over globby: book directory names can contain glob
     // metacharacters like `()` that fast-glob would interpret as patterns,
@@ -613,7 +614,9 @@ async function main() {
     )
   }
 
-  await setupTimestampedLogger(outDir)
+  if (useFileLogger) {
+    await setupTimestampedLogger(outDir)
+  }
 
   // Manual-retry selector: when set, re-transcribe only screenshots whose Kindle
   // page number matches. Existing content.json entries for those screenshots are
@@ -903,6 +906,15 @@ async function main() {
       `Verification found ${verifyResult.issues.length} issue(s); see warnings above.`
     )
   }
+}
+
+async function main() {
+  // `?? getEnv('ASIN')` preserves this script's historical no-argument
+  // behavior of falling back to ASIN from .env.
+  const arg = process.argv[2] ?? getEnv('ASIN')
+  assert(arg, 'ASIN is required')
+  const target = await resolveBookTarget(arg)
+  await transcribeBookContent(target)
 }
 
 // Only auto-run when invoked directly (e.g. `pnpm tsx src/transcribe-book-content.ts`),
