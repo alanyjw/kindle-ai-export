@@ -2,6 +2,7 @@ import 'dotenv/config'
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import ffmpeg from 'fluent-ffmpeg'
 import ky from 'ky'
@@ -10,6 +11,7 @@ import { OpenAIClient, type SpeechParams } from 'openai-fetch'
 import pMap from 'p-map'
 import { UnrealSpeechClient } from 'unrealspeech-api'
 
+import { resolveBookTarget } from './book-input'
 import { resolveBookMeta } from './book-meta'
 import type { BookMetadata, ContentChunk } from './types'
 import {
@@ -18,14 +20,19 @@ import {
   fileExists,
   getEnv,
   hashObject,
-  resolveOutDir
+  reportFatalError
 } from './utils'
 
 type TTSEngine = 'openai' | 'unrealspeech'
 
-async function main() {
-  const asin = getEnv('ASIN')
-  assert(asin, 'ASIN is required')
+export interface ExportBookAudioOptions {
+  outDir: string
+}
+
+export async function exportBookAudio(
+  opts: ExportBookAudioOptions
+): Promise<void> {
+  const { outDir } = opts
 
   // If force mode, we'll always regenerate all of the audio files.
   const force = getEnv('FORCE') === 'true'
@@ -33,7 +40,6 @@ async function main() {
   // In preview mode, we only export the first page of the book.
   const isPreview = getEnv('AUDIOBOOK_PREVIEW') === 'true'
 
-  const outDir = await resolveOutDir(asin)
   const audioOutDir = path.join(outDir, isPreview ? 'audio-previews' : 'audio')
   await fs.mkdir(audioOutDir, { recursive: true })
 
@@ -100,6 +106,9 @@ async function main() {
   }
   const title = resolved.title
   const authors = resolved.authorList
+  // Only Kindle-sourced books have an ASIN (and therefore an Amazon product
+  // page); PDF/EPUB books leave this undefined and the ID3 tag is omitted.
+  const asin = metadata.meta?.asin
 
   const configDirHash = hashObject({
     ttsEngine,
@@ -317,7 +326,9 @@ ${text}`.split('\n\n')
           title: isPreview ? `Preview of ${title}` : title,
           artist: authors.join('/'),
           encodedBy: 'https://github.com/transitive-bullshit/kindle-ai-export',
-          commercialUrl: [`https://www.amazon.com/dp/${asin}`]
+          ...(asin
+            ? { commercialUrl: [`https://www.amazon.com/dp/${asin}`] }
+            : {})
           // image: 'https://m.media-amazon.com/images/I/41sMaof0iQL.jpg', // TODO
           // TODO: these tags don't seem to be working properly in the node-id3 library
           // chapter: metadata.toc
@@ -394,4 +405,26 @@ async function ffmpegProbe(filePath: string) {
   })
 }
 
-await main()
+async function main() {
+  // `?? getEnv('ASIN')` preserves this script's historical no-argument
+  // behavior of falling back to ASIN from .env. The positional argument is
+  // new: it lets PDF- and EPUB-sourced books reach an out-dir, which an ASIN
+  // lookup alone could never do.
+  const arg = process.argv[2] ?? getEnv('ASIN')
+  assert(arg, 'ASIN is required')
+  const target = await resolveBookTarget(arg)
+  await exportBookAudio({ outDir: target.outDir })
+}
+
+// Only auto-run when invoked directly, so importing this module (from book.ts
+// or a test) doesn't kick off an audiobook export.
+const entry = process.argv[1]
+if (entry && import.meta.url === pathToFileURL(entry).href) {
+  try {
+    await main()
+  } catch (err) {
+    // Write to the real stderr and exit non-zero so a `&&` chain stops here.
+    reportFatalError('Audio export failed', err)
+    process.exit(1)
+  }
+}
