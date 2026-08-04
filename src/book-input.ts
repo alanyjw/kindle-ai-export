@@ -71,7 +71,8 @@ export function classifyBookArg(
  */
 export async function resolveBookTarget(
   arg: string | undefined,
-  isExistingDir?: (p: string) => boolean
+  isExistingDir?: (p: string) => boolean,
+  resolveOutDirFn: (asin: string) => Promise<string> = resolveOutDir
 ): Promise<BookTarget> {
   const classified = classifyBookArg(arg, isExistingDir)
 
@@ -80,7 +81,7 @@ export async function resolveBookTarget(
     case 'epub':
       return { ...classified, outDir: path.join('out', classified.basename) }
     case 'kindle':
-      return { ...classified, outDir: await resolveOutDir(classified.asin) }
+      return { ...classified, outDir: await resolveOutDirFn(classified.asin) }
     case 'outdir':
       return classified
   }

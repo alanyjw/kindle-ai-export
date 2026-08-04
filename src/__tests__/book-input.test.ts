@@ -117,12 +117,25 @@ describe('resolveBookTarget', () => {
   })
 
   it('resolves a Kindle ASIN through resolveOutDir', async () => {
-    // No out/ASIN000001* directory exists in the repo, so resolveOutDir falls
-    // back to the bare out/<asin> form.
-    await expect(resolveBookTarget('ASIN000001', noDirs)).resolves.toEqual({
+    await expect(
+      resolveBookTarget('ASIN000001', noDirs, async (asin) =>
+        path.join('out', asin)
+      )
+    ).resolves.toEqual({
       kind: 'kindle',
       asin: 'ASIN000001',
       outDir: path.join('out', 'ASIN000001')
+    })
+  })
+
+  it('uses whatever directory the injected resolver returns', async () => {
+    await expect(
+      resolveBookTarget('ASIN000001', noDirs, async () =>
+        path.join('out', 'ASIN000001-Example Book')
+      )
+    ).resolves.toMatchObject({
+      kind: 'kindle',
+      outDir: path.join('out', 'ASIN000001-Example Book')
     })
   })
 })
