@@ -7,7 +7,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 
-import { parseBookFlags } from './book-flags'
+import { BOOK_USAGE, parseBookFlags } from './book-flags'
 import type { BookFlags } from './book-flags'
 import { resolveBookTarget } from './book-input'
 import type { BookTarget } from './book-input'
@@ -62,12 +62,16 @@ async function step<T>(label: string, fn: () => Promise<T>): Promise<T> {
  * Steps are injected so the sequence is testable without a browser, the
  * OpenAI API, or the filesystem. Fails fast: the first step to throw aborts
  * the run, so a `--pdf` failure still leaves the markdown on disk.
+ *
+ * Returns the final out-dir. For a Kindle target this supersedes the one
+ * resolved before the run started, since extraction renames `out/<asin>` to
+ * `out/<asin>-<title>` once the title is known.
  */
 export async function runBook(
   target: BookTarget,
   flags: BookFlags,
   steps: BookSteps
-): Promise<void> {
+): Promise<{ outDir: string }> {
   // Extraction renames out/<asin> to out/<asin>-<title> once the title is
   // known, so its returned directory supersedes the one resolved up front.
   const extracted =
@@ -111,6 +115,8 @@ export async function runBook(
       steps.exportBookAudio({ outDir: resolved.outDir })
     )
   }
+
+  return { outDir: resolved.outDir }
 }
 
 // Dynamic imports keep the heavy dependencies out of runs that don't need
@@ -185,15 +191,25 @@ function reportUsageError(err: unknown): never {
 }
 
 async function main(): Promise<void> {
+  // A help request is a success, not a usage error — and must be handled
+  // before any parsing so `--help`/`-h` can never be misclassified as an
+  // <input> (see book-input.ts's leading-dash guard) or touch the filesystem.
+  if (process.argv.slice(2).some((arg) => arg === '--help' || arg === '-h')) {
+    process.stdout.write(`${BOOK_USAGE}\n`)
+    process.exit(0)
+  }
+
   const [input, ...flagArgs] = process.argv.slice(2)
 
   let flags: BookFlags
   let target: BookTarget
   try {
-    // Flags parse first so `pnpm book --pfd x.pdf` reports the typo rather
-    // than trying to classify "--pfd" as an input.
-    flags = parseBookFlags(flagArgs)
+    // Target resolves before flags parse. `input` is whatever landed in
+    // position 0; classifyBookArg (book-input.ts) rejects a leading dash, so
+    // `pnpm book --pfd example.pdf` reports "--pfd" as the unknown flag
+    // instead of misreporting the unrelated tail argument "example.pdf".
     target = await resolveBookTarget(input)
+    flags = parseBookFlags(flagArgs)
   } catch (err) {
     reportUsageError(err)
   }
@@ -226,11 +242,27 @@ async function main(): Promise<void> {
   await fs.mkdir(target.outDir, { recursive: true })
   const { logPath } = await setupTimestampedLogger(target.outDir)
 
-  await runBook(target, flags, defaultBookSteps)
+  let finalOutDir: string
+  try {
+    const result = await runBook(target, flags, defaultBookSteps)
+    finalOutDir = result.outDir
+  } catch (err) {
+    // console.* is redirected to the log file for the whole run, so without
+    // this a failed run leaves a one-line error and no pointer to the file
+    // holding the detail. Plain path, no stack trace — reportFatalError
+    // (called by the entry guard below) adds that separately.
+    process.stderr.write(`Log: ${logPath}\n`)
+    throw err
+  }
+
+  // Extraction may have renamed target.outDir (out/<asin> → out/<asin>-<title>),
+  // so recompute the printed path from the final out-dir rather than reusing
+  // logPath's now possibly-stale directory.
+  const finalLogPath = path.join(finalOutDir, 'logs', path.basename(logPath))
 
   // console.* is redirected to the log file at this point, so write the
   // summary to the real stdout.
-  process.stdout.write(`\n✅ Done. Log: ${logPath}\n`)
+  process.stdout.write(`\n✅ Done. Log: ${finalLogPath}\n`)
 }
 
 const entry = process.argv[1]

@@ -16,7 +16,8 @@ export const BOOK_USAGE = `Usage: pnpm book <input> [flags]
     --pdf        also export book.pdf
     --audio      also export the audiobook
     --all        equivalent to --pdf --audio
-    --force      re-run steps that would otherwise no-op`
+    --force      re-extract and regenerate audio even if already done;
+                 does NOT re-transcribe — delete content.json for that`
 
 const NO_FLAGS: BookFlags = { pdf: false, audio: false, force: false }
 

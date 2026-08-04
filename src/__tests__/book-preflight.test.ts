@@ -43,6 +43,13 @@ const PDF_TARGET: BookTarget = {
   outDir: path.join('out', 'example-book')
 }
 
+const EPUB_TARGET: BookTarget = {
+  kind: 'epub',
+  sourcePath: '/books/example-book.epub',
+  basename: 'example-book',
+  outDir: path.join('out', 'example-book')
+}
+
 const KINDLE_TARGET: BookTarget = {
   kind: 'kindle',
   asin: 'ASIN000001',
@@ -68,8 +75,11 @@ describe('checkPreflight', () => {
   })
 
   it('demands OPENAI_API_KEY for --audio when TTS_ENGINE is unset', () => {
+    // Uses OUTDIR_TARGET rather than PDF_TARGET: an outdir target never needs
+    // OPENAI_API_KEY for transcription (it's already transcribed), which
+    // isolates this assertion to the --audio credential check alone.
     const problems = checkPreflight(
-      PDF_TARGET,
+      OUTDIR_TARGET,
       AUDIO,
       envWithout('OPENAI_API_KEY'),
       OK_PROBES
@@ -80,7 +90,7 @@ describe('checkPreflight', () => {
 
   it('demands OPENAI_API_KEY for --audio when TTS_ENGINE is openai', () => {
     const problems = checkPreflight(
-      PDF_TARGET,
+      OUTDIR_TARGET,
       AUDIO,
       { ...envWithout('OPENAI_API_KEY'), TTS_ENGINE: 'openai' },
       OK_PROBES
@@ -91,7 +101,7 @@ describe('checkPreflight', () => {
 
   it('demands UNREAL_SPEECH_API_KEY, not OPENAI_API_KEY, for unrealspeech', () => {
     const problems = checkPreflight(
-      PDF_TARGET,
+      OUTDIR_TARGET,
       AUDIO,
       {
         ...envWithout('UNREAL_SPEECH_API_KEY'),
@@ -106,7 +116,7 @@ describe('checkPreflight', () => {
   it('does not demand OPENAI_API_KEY for unrealspeech', () => {
     expect(
       checkPreflight(
-        PDF_TARGET,
+        OUTDIR_TARGET,
         AUDIO,
         { ...envWithout('OPENAI_API_KEY'), TTS_ENGINE: 'unrealspeech' },
         OK_PROBES
@@ -165,6 +175,52 @@ describe('checkPreflight', () => {
     ).toEqual([])
   })
 
+  it('demands OPENAI_API_KEY to transcribe a Kindle target', () => {
+    const problems = checkPreflight(
+      KINDLE_TARGET,
+      NO_FLAGS,
+      envWithout('OPENAI_API_KEY'),
+      OK_PROBES
+    )
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toMatch(/OPENAI_API_KEY/)
+    expect(problems[0]).toMatch(/transcribe/)
+  })
+
+  it('demands OPENAI_API_KEY to transcribe a PDF target', () => {
+    const problems = checkPreflight(
+      PDF_TARGET,
+      NO_FLAGS,
+      envWithout('OPENAI_API_KEY'),
+      OK_PROBES
+    )
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toMatch(/OPENAI_API_KEY/)
+    expect(problems[0]).toMatch(/transcribe/)
+  })
+
+  it('does not demand OPENAI_API_KEY for an EPUB target', () => {
+    expect(
+      checkPreflight(
+        EPUB_TARGET,
+        NO_FLAGS,
+        envWithout('OPENAI_API_KEY'),
+        OK_PROBES
+      )
+    ).toEqual([])
+  })
+
+  it('does not demand OPENAI_API_KEY for an outdir target', () => {
+    expect(
+      checkPreflight(
+        OUTDIR_TARGET,
+        NO_FLAGS,
+        envWithout('OPENAI_API_KEY'),
+        OK_PROBES
+      )
+    ).toEqual([])
+  })
+
   it('reports a missing source file, naming the path', () => {
     const problems = checkPreflight(PDF_TARGET, NO_FLAGS, FULL_ENV, {
       ...OK_PROBES,
@@ -208,12 +264,15 @@ describe('checkPreflight', () => {
   })
 
   it('accumulates independent problems', () => {
+    // Missing OPENAI_API_KEY is flagged twice here — once by audioProblems
+    // (--audio needs it) and once by targetProblems (transcription needs
+    // it) — plus the missing AMAZON_EMAIL and the missing ffmpeg: 4 total.
     const problems = checkPreflight(
       KINDLE_TARGET,
       AUDIO,
       envWithout('AMAZON_EMAIL', 'OPENAI_API_KEY'),
       { ...OK_PROBES, hasFfmpeg: false }
     )
-    expect(problems).toHaveLength(3)
+    expect(problems).toHaveLength(4)
   })
 })

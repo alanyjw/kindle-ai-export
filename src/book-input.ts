@@ -42,6 +42,14 @@ export function classifyBookArg(
     throw new Error(`an input is required\n\n${BOOK_USAGE}`)
   }
 
+  // A leading dash means this is a flag (or a flag typo), not an <input> — the
+  // most common case being `--help`/`-h` reaching here because they were
+  // never special-cased, which used to classify them as a Kindle ASIN and
+  // launch a real extraction.
+  if (input.startsWith('-')) {
+    throw new Error(`unknown flag: ${input}\n\n${BOOK_USAGE}`)
+  }
+
   if (PDF_RE.test(input) || EPUB_RE.test(input)) {
     const sourcePath = path.resolve(input)
     const basename = sanitizeDirname(

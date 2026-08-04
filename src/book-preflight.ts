@@ -62,22 +62,34 @@ function targetProblems(
           ? []
           : [
               'AMAZON_PASSWORD is required to extract a Kindle book; set it in .env'
-            ])
+            ]),
+        ...(env.OPENAI_API_KEY
+          ? []
+          : ['OPENAI_API_KEY is required to transcribe; set it in .env'])
       ]
 
     case 'pdf':
-    case 'epub':
-      if (probes.sourceFile === 'missing') {
-        return [`source file not found: ${target.sourcePath}`]
-      }
-      if (probes.sourceFile === 'unreadable') {
-        return [
-          `source file exists but could not be read: ${target.sourcePath}\n` +
-            '    On macOS, files in iCloud Drive fail with EPERM until the terminal is\n' +
-            '    granted Full Disk Access (System Settings → Privacy & Security).'
-        ]
-      }
-      return []
+    case 'epub': {
+      const sourceFileProblems: string[] =
+        probes.sourceFile === 'missing'
+          ? [`source file not found: ${target.sourcePath}`]
+          : probes.sourceFile === 'unreadable'
+            ? [
+                `source file exists but could not be read: ${target.sourcePath}\n` +
+                  '    On macOS, files in iCloud Drive fail with EPERM until the terminal is\n' +
+                  '    granted Full Disk Access (System Settings → Privacy & Security).'
+              ]
+            : []
+
+      // Only PDFs are OCR'd through OpenAI — EPUB transcription parses the
+      // container natively and never constructs an OpenAI client.
+      return [
+        ...sourceFileProblems,
+        ...(target.kind === 'pdf' && !env.OPENAI_API_KEY
+          ? ['OPENAI_API_KEY is required to transcribe; set it in .env']
+          : [])
+      ]
+    }
 
     case 'outdir':
       return probes.hasContentJson

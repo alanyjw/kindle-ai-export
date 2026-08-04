@@ -153,6 +153,29 @@ describe('runBook', () => {
     }
   })
 
+  it('returns the renamed out-dir for a Kindle target', async () => {
+    // The out-dir printed after a run (e.g. for the log path) must reflect
+    // the post-rename directory, not the pre-extraction out/<asin> guess.
+    const renamed = path.join('out', 'ASIN000001-Example Book')
+    const recorded = newRecorded()
+
+    const result = await runBook(
+      KINDLE_TARGET,
+      NO_FLAGS,
+      recordingSteps(recorded, {
+        extractKindleBook: async () => ({ outDir: renamed })
+      })
+    )
+
+    expect(result).toEqual({ outDir: renamed })
+  })
+
+  it('returns the target out-dir unchanged for a non-Kindle target', async () => {
+    const recorded = newRecorded()
+    const result = await runBook(PDF_TARGET, NO_FLAGS, recordingSteps(recorded))
+    expect(result).toEqual({ outDir: PDF_TARGET.outDir })
+  })
+
   it('passes the source basename to the markdown export for a PDF target', async () => {
     const recorded = newRecorded()
     await runBook(PDF_TARGET, NO_FLAGS, recordingSteps(recorded))
