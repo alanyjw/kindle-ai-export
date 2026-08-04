@@ -5,6 +5,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { resolveBookMeta } from './book-meta'
+import { resolveBookTarget } from './book-input'
 import { stripOcrBoilerplate } from './ocr-boilerplate'
 import { cleanSectionOpening } from './pdf-drop-cap'
 import type { BookMetadata, ContentChunk } from './types'
@@ -15,7 +16,6 @@ import {
   getEnv,
   progressBarNewline,
   reportFatalError,
-  resolveOutDir,
   sanitizeDirname,
   setupTimestampedLogger
 } from './utils'
@@ -431,28 +431,17 @@ ${text}`
 }
 
 async function main() {
-  const arg = process.argv[2]
+  // `?? getEnv('ASIN')` preserves this script's historical no-argument
+  // behavior of falling back to ASIN from .env.
+  const arg = process.argv[2] ?? getEnv('ASIN')
+  assert(arg, 'ASIN is required')
+  const target = await resolveBookTarget(arg)
+  const pdfBasename =
+    target.kind === 'pdf' || target.kind === 'epub'
+      ? target.basename
+      : undefined
 
-  let outDir: string
-  let pdfBasename: string | undefined
-
-  if (arg) {
-    if (/\.(?:pdf|epub)$/i.test(arg)) {
-      const filePath = path.resolve(arg)
-      pdfBasename = sanitizeDirname(
-        path.basename(filePath, path.extname(filePath))
-      )
-      outDir = path.join('out', pdfBasename)
-    } else {
-      outDir = path.resolve(arg)
-    }
-  } else {
-    const asin = getEnv('ASIN')
-    assert(asin, 'ASIN is required')
-    outDir = await resolveOutDir(asin)
-  }
-
-  await exportBookMarkdown({ outDir, pdfBasename })
+  await exportBookMarkdown({ outDir: target.outDir, pdfBasename })
 }
 
 const entry = process.argv[1]

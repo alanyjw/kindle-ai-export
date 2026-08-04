@@ -15,6 +15,7 @@
   },
   "type": "module",
   "scripts": {
+    "book": "tsx src/book.ts",
     "test": "run-s test:*",
     "test:format": "prettier --check \"**/*.{js,ts,tsx}\"",
     "test:format:fix": "prettier --write \"**/*.{js,ts,tsx}\"",

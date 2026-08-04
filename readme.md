@@ -13,6 +13,7 @@
   - [Audiobook Examples 🔥](#audiobook-examples-)
   - [Why is this necessary?](#why-is-this-necessary)
 - [Usage](#usage)
+  - [One-Command Export](#one-command-export)
   - [Setup Env Vars](#setup-env-vars)
   - [Extract Kindle Book](#extract-kindle-book)
   - [Transcribe Book Content](#transcribe-book-content)
@@ -146,6 +147,30 @@ _Why?_ Because I love reading books on Kindle (especially scifi books!!), but no
 I also created an [OSS TypeScript client for the unofficial Kindle API](https://github.com/transitive-bullshit/kindle-api), but I ended up only using some of the types and utils since Playwright + vLLMs allowed me to completely bypass their API and DRM. This approach should also be a lot less error-prone than using their unofficial API.
 
 ## Usage
+
+### One-Command Export
+
+Once you've [set up your environment variables](#setup-env-vars), the fastest way to export a book is the single `pnpm book` command, which runs the whole pipeline in one process:
+
+```sh
+pnpm book <input> [--pdf] [--audio] [--all] [--force]
+```
+
+- `<input>` can be a `.pdf` path, an `.epub` path, a Kindle ASIN (e.g. `B0819W19WD`), or an existing `out/<dir>` from a previous run — the command detects which and only runs the steps that input needs (a Kindle ASIN extracts then transcribes; a PDF or EPUB transcribes; an `out/<dir>` just re-exports).
+- Markdown export always runs. `--pdf` and `--audio` add the PDF and audiobook exports on top of it; `--all` is shorthand for both.
+- Preflight checks (API keys, `ffmpeg`, source file readability, an existing `content.json`, etc.) run before any long-running step, so missing setup fails immediately instead of after several minutes of extraction or transcription.
+- Passing an ASIN directly means Kindle books no longer require setting `ASIN` in `.env`.
+- Exactly one timestamped log file is written per run, to `out/<dir>/logs/`.
+- The markdown export writes `<Title>.md` (derived from the book's title); only the PDF export writes a literal `book.pdf`.
+
+```sh
+pnpm book example.pdf                # transcribe + markdown
+pnpm book example.epub --pdf         # transcribe + markdown + PDF
+pnpm book B0819W19WD --all           # extract, transcribe, markdown + PDF + audiobook
+pnpm book out/B0819W19WD             # re-export only; skips extract + transcribe
+```
+
+The per-step commands below still work unchanged, and are the way to run a single stage in isolation — e.g. re-exporting markdown after hand-editing `content.json`.
 
 Make sure you have `node >= 18` and [pnpm](https://pnpm.io) installed.
 

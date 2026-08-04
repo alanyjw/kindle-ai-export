@@ -2,6 +2,7 @@ import 'dotenv/config'
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import { input } from '@inquirer/prompts'
 import delay from 'delay'
@@ -47,8 +48,25 @@ interface TocItem extends PageNav {
   locator?: Locator
 }
 
-async function main() {
-  const asin = getEnv('ASIN')
+export interface ExtractKindleBookOptions {
+  asin: string
+  // When true (default), hijacks console output to a timestamped log file in
+  // `<outDir>/logs/`. `book.ts` passes false because it installs one shared
+  // logger for the whole pipeline run.
+  useFileLogger?: boolean
+}
+
+/**
+ * Extract a Kindle book's page screenshots and metadata.
+ *
+ * Returns the FINAL output directory. Extraction renames `out/<asin>` to
+ * `out/<asin>-<title>` once the title is known (see the rename below), so the
+ * directory a caller resolved beforehand is stale on return.
+ */
+export async function extractKindleBook(
+  opts: ExtractKindleBookOptions
+): Promise<{ outDir: string }> {
+  const { asin, useFileLogger = true } = opts
   const amazonEmail = getEnv('AMAZON_EMAIL')
   const amazonPassword = getEnv('AMAZON_PASSWORD')
   const force = getEnv('FORCE') === 'true'
@@ -65,7 +83,9 @@ async function main() {
     progressBarNewline
   } = await import('./utils')
   let outDir = await resolveOutDir(asin)
-  await setupTimestampedLogger(outDir)
+  if (useFileLogger) {
+    await setupTimestampedLogger(outDir)
+  }
   const metadataPath = path.join(outDir, 'metadata.json')
   const pagesDir = path.join(outDir, 'pages')
 
@@ -183,7 +203,7 @@ async function main() {
           console.warn(
             '✅ Extraction appears complete based on page range. Use FORCE=true to re-extract.'
           )
-          return
+          return { outDir }
         }
       }
 
@@ -202,7 +222,7 @@ async function main() {
           console.warn(
             `${colors.green}✅ Extraction appears complete. Use FORCE=true to re-extract.${colors.reset}`
           )
-          return
+          return { outDir }
         }
         // Pages are all captured but `meta`/`info` never made it into
         // metadata.json. Relaunch (rather than returning) so the response
@@ -1167,6 +1187,8 @@ async function main() {
 
   await page.close()
   await context.close()
+
+  return { outDir }
 }
 
 function parsePageNav(text: string | null): PageNav | undefined {
@@ -1214,15 +1236,26 @@ function parsePageNav(text: string | null): PageNav | undefined {
   }
 }
 
-try {
-  await main()
-} catch (err) {
-  // reportFatalError writes to the real stderr (not the redirected console),
-  // so the reason is visible on the terminal. Force a non-zero exit so a
-  // `pnpm tsx … && pnpm tsx …` chain stops here instead of running
-  // transcription against a missing/partial extraction — process.exit also
-  // tears down any still-open Playwright browser that would otherwise keep
-  // the event loop alive and hang the whole command chain.
-  reportFatalError('Extraction failed', err)
-  process.exit(1)
+async function main() {
+  const asin = getEnv('ASIN')
+  assert(asin, 'ASIN is required')
+  await extractKindleBook({ asin })
+}
+
+// Only auto-run when invoked directly, so importing this module (from book.ts)
+// doesn't launch Playwright and start an extraction at import time.
+const entry = process.argv[1]
+if (entry && import.meta.url === pathToFileURL(entry).href) {
+  try {
+    await main()
+  } catch (err) {
+    // reportFatalError writes to the real stderr (not the redirected console),
+    // so the reason is visible on the terminal. Force a non-zero exit so a
+    // `pnpm tsx … && pnpm tsx …` chain stops here instead of running
+    // transcription against a missing/partial extraction — process.exit also
+    // tears down any still-open Playwright browser that would otherwise keep
+    // the event loop alive and hang the whole command chain.
+    reportFatalError('Extraction failed', err)
+    process.exit(1)
+  }
 }

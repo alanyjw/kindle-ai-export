@@ -3,35 +3,23 @@ import 'dotenv/config'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import PDFDocument from 'pdfkit'
 
 import { resolveBookMeta } from './book-meta'
+import { resolveBookTarget } from './book-input'
 import type { BookMetadata, ContentChunk } from './types'
-import { assert, getEnv, resolveOutDir, sanitizeDirname } from './utils'
+import { assert, getEnv, reportFatalError } from './utils'
 
-// Resolves the output directory from an optional CLI arg (a .pdf/.epub path or
-// an out/ dir) or, when absent, from the ASIN env. PDF export requires
-// metadata.json, which the EPUB and Kindle pipelines both produce.
-async function resolveOutDirArg(): Promise<string> {
-  const arg = process.argv[2]
-  if (arg) {
-    if (/\.(?:pdf|epub)$/i.test(arg)) {
-      const filePath = path.resolve(arg)
-      const base = sanitizeDirname(
-        path.basename(filePath, path.extname(filePath))
-      )
-      return path.join('out', base)
-    }
-    return path.resolve(arg)
-  }
-  const asin = getEnv('ASIN')
-  assert(asin, 'ASIN is required')
-  return resolveOutDir(asin)
+export interface ExportBookPdfOptions {
+  outDir: string
 }
 
-async function main() {
-  const outDir = await resolveOutDirArg()
+export async function exportBookPdf(
+  opts: ExportBookPdfOptions
+): Promise<{ pdfPath: string }> {
+  const { outDir } = opts
 
   const content = JSON.parse(
     await fsp.readFile(path.join(outDir, 'content.json'), 'utf8')
@@ -59,7 +47,8 @@ async function main() {
       Author: authors.join(', ')
     }
   })
-  const stream = doc.pipe(fs.createWriteStream(path.join(outDir, 'book.pdf')))
+  const pdfPath = path.join(outDir, 'book.pdf')
+  const stream = doc.pipe(fs.createWriteStream(pdfPath))
 
   const fontSize = 12
 
@@ -128,6 +117,28 @@ async function main() {
     stream.on('finish', () => resolve())
     stream.on('error', (err) => reject(err))
   })
+
+  return { pdfPath }
 }
 
-await main()
+async function main() {
+  // `?? getEnv('ASIN')` preserves this script's historical no-argument
+  // behavior of falling back to ASIN from .env.
+  const arg = process.argv[2] ?? getEnv('ASIN')
+  assert(arg, 'ASIN is required')
+  const target = await resolveBookTarget(arg)
+  await exportBookPdf({ outDir: target.outDir })
+}
+
+// Only auto-run when invoked directly, so importing this module (from book.ts
+// or a test) doesn't kick off a PDF export.
+const entry = process.argv[1]
+if (entry && import.meta.url === pathToFileURL(entry).href) {
+  try {
+    await main()
+  } catch (err) {
+    // Write to the real stderr and exit non-zero so a `&&` chain stops here.
+    reportFatalError('PDF export failed', err)
+    process.exit(1)
+  }
+}
