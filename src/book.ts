@@ -1,6 +1,20 @@
+import 'dotenv/config'
+
+import { execFile } from 'node:child_process'
+import { constants } from 'node:fs'
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
+
+import { parseBookFlags } from './book-flags'
 import type { BookFlags } from './book-flags'
+import { resolveBookTarget } from './book-input'
 import type { BookTarget } from './book-input'
+import { checkPreflight } from './book-preflight'
+import type { PreflightProbes, SourceFileProbe } from './book-preflight'
 import type { ExportBookMarkdownOptions } from './export-book-markdown'
+import { fileExists, reportFatalError, setupTimestampedLogger } from './utils'
 
 /**
  * Wraps a step failure with the label its standalone script would have
@@ -96,5 +110,122 @@ export async function runBook(
     await step('Audio export failed', () =>
       steps.exportBookAudio({ outDir: resolved.outDir })
     )
+  }
+}
+
+// Dynamic imports keep the heavy dependencies out of runs that don't need
+// them: Playwright (extract) and fluent-ffmpeg + unrealspeech-api (audio)
+// would otherwise load on every plain PDF-to-markdown run.
+const defaultBookSteps: BookSteps = {
+  extractKindleBook: async (opts) =>
+    (await import('./extract-kindle-book')).extractKindleBook(opts),
+  transcribeBookContent: async (target, opts) =>
+    (await import('./transcribe-book-content')).transcribeBookContent(
+      target,
+      opts
+    ),
+  exportBookMarkdown: async (opts: ExportBookMarkdownOptions) =>
+    (await import('./export-book-markdown')).exportBookMarkdown(opts),
+  exportBookPdf: async (opts) =>
+    (await import('./export-book-pdf')).exportBookPdf(opts),
+  exportBookAudio: async (opts) =>
+    (await import('./export-book-audio')).exportBookAudio(opts)
+}
+
+const execFileAsync = promisify(execFile)
+
+async function probeFfmpeg(): Promise<boolean> {
+  // fluent-ffmpeg honours FFMPEG_PATH, so probe the same binary it will use.
+  const bin = process.env.FFMPEG_PATH || 'ffmpeg'
+  try {
+    await execFileAsync(bin, ['-version'])
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function probeSourceFile(filePath: string): Promise<SourceFileProbe> {
+  if (!(await fileExists(filePath, constants.F_OK))) return 'missing'
+  // Distinct from 'missing': macOS iCloud Drive files exist but fail R_OK with
+  // EPERM until the terminal is granted Full Disk Access.
+  if (!(await fileExists(filePath, constants.R_OK))) return 'unreadable'
+  return 'ok'
+}
+
+async function probe(
+  target: BookTarget,
+  flags: BookFlags
+): Promise<PreflightProbes> {
+  const hasFfmpeg = flags.audio ? await probeFfmpeg() : true
+
+  switch (target.kind) {
+    case 'pdf':
+    case 'epub':
+      return { hasFfmpeg, sourceFile: await probeSourceFile(target.sourcePath) }
+    case 'outdir':
+      return {
+        hasFfmpeg,
+        hasContentJson: await fileExists(
+          path.join(target.outDir, 'content.json')
+        )
+      }
+    case 'kindle':
+      return { hasFfmpeg }
+  }
+}
+
+async function main() {
+  const [input, ...flagArgs] = process.argv.slice(2)
+
+  // Flags parse first so `pnpm book --pfd x.pdf` reports the typo rather than
+  // trying to classify "--pfd" as an input.
+  const flags = parseBookFlags(flagArgs)
+  const target = await resolveBookTarget(input)
+
+  // Set FORCE for the whole process so each step's existing getEnv('FORCE')
+  // check sees it, rather than threading a parameter through five call sites.
+  if (flags.force) {
+    process.env.FORCE = 'true'
+  }
+
+  const problems = checkPreflight(
+    target,
+    flags,
+    process.env,
+    await probe(target, flags)
+  )
+  if (problems.length > 0) {
+    reportFatalError(
+      'Preflight failed',
+      problems.map((p) => `\n  - ${p}`).join('')
+    )
+    process.exit(1)
+  }
+
+  // One shared log file for the whole run. Without this each step installs its
+  // own and a single export scatters output across several files.
+  await fs.mkdir(target.outDir, { recursive: true })
+  const { logPath } = await setupTimestampedLogger(target.outDir)
+
+  await runBook(target, flags, defaultBookSteps)
+
+  // console.* is redirected to the log file at this point, so write the
+  // summary to the real stdout.
+  process.stdout.write(`\n✅ Done. Log: ${logPath}\n`)
+}
+
+const entry = process.argv[1]
+if (entry && import.meta.url === pathToFileURL(entry).href) {
+  try {
+    await main()
+  } catch (err) {
+    // Write to the real stderr (the console is redirected to the log file).
+    if (err instanceof BookStepError) {
+      reportFatalError(err.label, err.cause)
+    } else {
+      reportFatalError('Book pipeline failed', err)
+    }
+    process.exit(1)
   }
 }
