@@ -42,10 +42,12 @@
     "node-id3": "^0.2.6",
     "openai-fetch": "^3.3.1",
     "p-map": "^7.0.2",
+    "patchright": "^1.61.1",
     "pdfjs-dist": "^5.4.449",
     "pdfkit": "^0.15.0",
     "playwright": "^1.57.0",
     "playwright-core": "^1.57.0",
+    "sharp": "^0.35.3",
     "unrealspeech-api": "^1.0.2"
   },
   "devDependencies": {

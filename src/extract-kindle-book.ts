@@ -6,8 +6,17 @@ import { pathToFileURL } from 'node:url'
 
 import { input } from '@inquirer/prompts'
 import delay from 'delay'
-import { chromium, type Locator } from 'playwright'
+// Patchright is a drop-in Playwright fork that removes the automation tells
+// Amazon's anti-bot checks for (the `Runtime.enable` CDP leak, `navigator
+// .webdriver`, automation-only command-line flags).
+import { chromium, type Locator } from 'patchright'
+import sharp from 'sharp'
 
+import {
+  blobRetentionInitScript,
+  capturePageImage,
+  fetchBlobAsBase64InPage
+} from './page-image-capture'
 import {
   type MetadataFetcher,
   recoverBookMetadata as recoverBookMetadataImpl
@@ -39,6 +48,13 @@ const colors = {
   brightGreen: '\u001B[1;32m',
   brightRed: '\u001B[1;31m'
 } as const
+
+// Rendering the reader above 1x gives the OCR step sharper glyphs to read.
+// Captured page images are scaled back down by this factor, on the assumption
+// that the renderer sizes its PNG to viewport x DPR — which would keep on-disk
+// dimensions the same as the screenshots this used to write. Unverified
+// against a live book; `capturePage` logs both sizes on its first capture.
+const DEVICE_SCALE_FACTOR = 1.5
 
 // Browser-aware TOC item: the shared `PageNav` position fields plus the
 // Playwright `Locator` used to click the entry. `parseTocItems` is generic over
@@ -276,8 +292,6 @@ export async function extractKindleBook(
       '--disable-features=PasswordManager,PasswordManagerOnboarding,WebAuthentication',
       '--disable-component-extensions-with-background-pages',
       '--disable-sync',
-      '--disable-default-apps',
-      '--disable-extensions',
       '--no-first-run',
 
       // Performance optimizations
@@ -285,13 +299,23 @@ export async function extractKindleBook(
       '--enable-gpu-rasterization',
       '--enable-zero-copy',
       '--disable-dev-shm-usage',
-      '--disable-blink-features=AutomationControlled',
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding'
+
+      // NOTE: `--disable-blink-features=AutomationControlled`,
+      // `--disable-default-apps` and `--disable-extensions` are deliberately
+      // absent. Patchright manages that first flag itself, and treats the
+      // other two as fingerprinting tells — a real Chrome profile has default
+      // apps and extensions enabled, so forcing them off is itself a signal.
+      // Re-adding any of them here would undo the stealth patches below.
     ],
-    ignoreDefaultArgs: ['--enable-automation'],
-    deviceScaleFactor: 1.5,
+    // Patchright already strips `--enable-automation`; `--no-sandbox` is a
+    // strong automation tell and Chrome shows an admin warning without it.
+    ignoreDefaultArgs: ['--enable-automation', '--no-sandbox'],
+    // Amazon's CSP would otherwise block the injected blob-capture hook.
+    bypassCSP: true,
+    deviceScaleFactor: DEVICE_SCALE_FACTOR,
     viewport: { width: 1280, height: 720 }
   })
 
@@ -302,7 +326,68 @@ export async function extractKindleBook(
     })
   })
 
+  // Keep the reader's rendered page images readable past its own
+  // `revokeObjectURL`, so capture below can read the renderer's original PNG
+  // instead of re-rasterizing it via a screenshot. Wrapped because this is the
+  // part a reader or browser change could break: if it fails to install,
+  // capture falls back to screenshots and extraction still completes.
+  let blobRetentionInstalled = false
+  try {
+    await context.addInitScript(blobRetentionInitScript)
+    blobRetentionInstalled = true
+  } catch (err: any) {
+    console.warn(
+      `${colors.yellow}⚠️  blob retention unavailable, falling back to screenshots: ${err?.message ?? String(err)}${colors.reset}`
+    )
+  }
+
   const page = await context.newPage()
+
+  // Counts how often each capture path ran, so a silent regression to
+  // screenshot-only capture is visible in the log rather than invisible.
+  const captureStats = { blob: 0, screenshot: 0 }
+
+  /**
+   * Capture the reader's currently rendered page image, preferring its
+   * original PNG blob over a screenshot of the <img> element.
+   */
+  async function capturePage(src: string | null | undefined): Promise<Buffer> {
+    const { buffer, source } = await capturePageImage({
+      src: blobRetentionInstalled ? src : undefined,
+      // Runs in Patchright's isolated world, which shares the page's origin
+      // and so can read a main-world blob URL that is still alive.
+      fetchBlob: (url) => page.evaluate(fetchBlobAsBase64InPage, url),
+      screenshot: () =>
+        page
+          .locator(krRendererMainImageSelector)
+          .screenshot({ type: 'png', scale: 'css' }),
+      // The reader is assumed to render at the device scale factor; scale back
+      // down so output dimensions match what `screenshot({ scale: 'css' })`
+      // produced. The first capture logs both sizes so that assumption can be
+      // checked against a real book.
+      normalize: async (raw) => {
+        const image = sharp(raw)
+        const { width, height } = await image.metadata()
+        if (!width || !height) return raw
+
+        const scaled = {
+          width: Math.round(width / DEVICE_SCALE_FACTOR),
+          height: Math.round(height / DEVICE_SCALE_FACTOR)
+        }
+
+        if (captureStats.blob === 0) {
+          console.warn(
+            `${colors.cyan}🖼️${colors.reset}  Renderer PNG is ${width}x${height}; writing pages at ${scaled.width}x${scaled.height}`
+          )
+        }
+
+        return image.resize(scaled).png().toBuffer()
+      }
+    })
+
+    captureStats[source] += 1
+    return buffer
+  }
 
   let info: BookInfo | undefined
   let meta: BookMeta | undefined
@@ -728,9 +813,9 @@ export async function extractKindleBook(
         .catch(() => {})
       await delay(500)
 
-      const b = await page
-        .locator(krRendererMainImageSelector)
-        .screenshot({ type: 'png', scale: 'css' })
+      const b = await capturePage(
+        await page.locator(krRendererMainImageSelector).getAttribute('src')
+      )
       const slug =
         item.title
           .trim()
@@ -982,9 +1067,7 @@ export async function extractKindleBook(
       continue
     }
 
-    const b = await page
-      .locator(krRendererMainImageSelector)
-      .screenshot({ type: 'png', scale: 'css' })
+    const b = await capturePage(src)
 
     await fs.writeFile(screenshotPath, b)
     pages.push({
@@ -1110,6 +1193,20 @@ export async function extractKindleBook(
   console.warn(`Expected pages: ${expectedPages}`)
   console.warn(`Extracted pages: ${extractedPages}`)
   console.warn(`Missing pages: ${missingPages}`)
+
+  const capturedTotal = captureStats.blob + captureStats.screenshot
+  if (capturedTotal > 0) {
+    console.warn(
+      `Image capture: ${captureStats.blob} from renderer blobs, ${captureStats.screenshot} from screenshots`
+    )
+    // Screenshots are the lossy path; if they dominate, blob capture has
+    // regressed and transcription quality will quietly suffer.
+    if (captureStats.screenshot > captureStats.blob) {
+      console.warn(
+        `${colors.yellow}⚠️  Most pages fell back to screenshots — the reader's blob capture hook may no longer be effective.${colors.reset}`
+      )
+    }
+  }
 
   if (missingPages > 0) {
     console.warn(
