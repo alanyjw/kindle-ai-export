@@ -12,6 +12,7 @@ import delay from 'delay'
 import { chromium, type Locator } from 'patchright'
 import sharp from 'sharp'
 
+import { hasExportableBookMeta } from './book-meta'
 import {
   blobRetentionInitScript,
   capturePageImage,
@@ -116,14 +117,14 @@ export async function extractKindleBook(
       const expectedPages =
         (existingMetadata.meta as any)?.totalPages || existingPages.length
 
-      // metadata.json can exist with `pages`/`toc` but no `meta`/`info` when a
-      // prior run captured screenshots yet never intercepted Amazon's
-      // startReading / YJmetadata network responses. The exporters require
-      // `meta`, so a page-complete-but-metadata-missing book must NOT
-      // short-circuit as "complete" — relaunching lets the response handler
-      // recapture meta/info, and existing screenshots are skipped so it's cheap.
-      const hasBookMeta =
-        existingMetadata.meta != null && existingMetadata.info != null
+      // metadata.json can exist with `pages`/`toc` but no `meta` when a prior
+      // run captured screenshots yet never intercepted Amazon's startReading /
+      // YJmetadata network responses. The exporters need a title, so a
+      // page-complete-but-title-missing book must NOT short-circuit as
+      // "complete" — relaunching lets the response handler recapture it, and
+      // existing screenshots are skipped so it's cheap. `info` is intentionally
+      // not part of this test; see `hasExportableBookMeta`.
+      const hasBookMeta = hasExportableBookMeta(existingMetadata)
 
       // Analyze screenshot files to understand extraction progress
       let actualScreenshots = 0
@@ -215,8 +216,8 @@ export async function extractKindleBook(
         }
 
         // Check if we've reached the expected end. Only treat the book as
-        // complete when the captured metadata also carries `meta`/`info`;
-        // otherwise fall through so we relaunch and recover them.
+        // complete when the captured metadata also carries a title; otherwise
+        // fall through so we relaunch and recover it.
         if (lastPage >= expectedPages && hasBookMeta) {
           console.warn(
             '✅ Extraction appears complete based on page range. Use FORCE=true to re-extract.'
@@ -242,13 +243,13 @@ export async function extractKindleBook(
           )
           return { outDir }
         }
-        // Pages are all captured but `meta`/`info` never made it into
-        // metadata.json. Relaunch (rather than returning) so the response
-        // handler can recapture them; existing screenshots are skipped. Without
-        // this the exporters keep failing with "invalid book metadata: missing
-        // meta" and FORCE=true would be the only way out.
+        // Pages are all captured but `meta` never made it into metadata.json.
+        // Relaunch (rather than returning) so the response handler can
+        // recapture it; existing screenshots are skipped. Without this the
+        // exporters fall back to an out-dir-derived title and FORCE=true would
+        // be the only way to try again.
         console.warn(
-          `${colors.yellow}⚠️  Pages look complete, but book metadata (meta/info) is missing from metadata.json — relaunching to recover it (existing screenshots are skipped)...${colors.reset}`
+          `${colors.yellow}⚠️  Pages look complete, but the book title is missing from metadata.json — relaunching to recover it (existing screenshots are skipped)...${colors.reset}`
         )
       } else {
         console.warn(
@@ -1158,31 +1159,39 @@ export async function extractKindleBook(
     )
   }
 
+  // `info`/`meta` are genuinely optional (see BookMetadata) — spread them in
+  // only when captured rather than asserting non-null, so the absent case is
+  // expressed rather than papered over.
   const result: BookMetadata = {
-    info: info!,
-    meta: meta!,
+    ...(info != null ? { info } : {}),
+    ...(meta != null ? { meta } : {}),
     toc,
     pages,
     ...(frontMatter.length > 0 ? { frontMatter } : {})
   }
 
-  // The exporters require `meta` (book title, author, page totals) and `info`.
-  // These come from Amazon's startReading / YJmetadata responses intercepted
-  // during this run. If they never fired, surface it loudly on the real stderr
-  // — otherwise we'd write a metadata.json that silently breaks the exporters
-  // with "invalid book metadata: missing meta", and the next run would just
-  // relaunch to try recovering it again.
-  if (meta == null || info == null) {
-    const missing = [meta == null && 'meta', info == null && 'info']
-      .filter(Boolean)
-      .join(' and ')
-    reportFatalError(
-      'Extraction warning',
-      new Error(
-        `book ${missing} was not captured (Amazon's metadata responses never fired). ` +
-          `Pages were saved, but the export step will fail until this is recovered. ` +
-          `Re-run extraction to retry capturing it.`
-      )
+  // `meta` (book title, author, page totals) and `info` (Kindle sync
+  // positions) come from Amazon's startReading / YJmetadata responses snooped
+  // during this run. Neither is fatal, and they fail for different reasons, so
+  // report them differently:
+  //
+  // - A missing title still has two recovery layers downstream (title-page OCR
+  //   during transcription, then an out-dir-derived fallback in the exporters),
+  //   so warn but don't imply the pipeline is broken.
+  // - A missing `info` has no downstream consumer at all, and Amazon has 403'd
+  //   `startReading` since ~June 2026. Saying so once is useful; presenting it
+  //   as something to re-run for is not.
+  if (meta == null) {
+    console.warn(
+      `${colors.yellow}⚠️  Book metadata was not captured (Amazon's metadata responses never fired). ` +
+        `Pages were saved; the transcribe step will try to recover the title from the title page.${colors.reset}`
+    )
+  }
+
+  if (info == null) {
+    console.warn(
+      `${colors.yellow}⚠️  Kindle sync positions (info) were not captured. ` +
+        `Exports are unaffected — only read-position interop is lost.${colors.reset}`
     )
   }
 

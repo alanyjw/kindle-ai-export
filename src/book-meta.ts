@@ -11,6 +11,24 @@ export interface ResolvedBookMeta {
   warning?: string
 }
 
+// Does this book already carry the metadata an export actually needs?
+//
+// Only `meta.title` qualifies, and deliberately NOT `info`: no exporter reads
+// `info` (it carries Kindle sync positions), and Amazon has 403'd the
+// `startReading` API that supplies it since ~June 2026. Requiring it meant a
+// book could never be considered complete, so every later run relaunched a
+// browser to chase a value that can no longer be fetched.
+//
+// Kept in lockstep with `resolveBookMeta` below — same trim, same emptiness
+// test — so extraction never calls a book complete that the exporters would
+// then treat as untitled.
+export function hasExportableBookMeta(
+  metadata: Pick<BookMetadata, 'meta'>
+): boolean {
+  const title = (metadata.meta as BookMetadata['meta'] | undefined)?.title
+  return typeof title === 'string' && title.trim().length > 0
+}
+
 // Derive the display title/author for an export.
 //
 // Prefers the captured `meta`, but degrades gracefully when metadata capture
