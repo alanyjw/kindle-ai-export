@@ -50,10 +50,12 @@ const colors = {
 } as const
 
 // Rendering the reader above 1x gives the OCR step sharper glyphs to read.
-// Captured page images are scaled back down by this factor, on the assumption
-// that the renderer sizes its PNG to viewport x DPR — which would keep on-disk
-// dimensions the same as the screenshots this used to write. Unverified
-// against a live book; `capturePage` logs both sizes on its first capture.
+// Captured page images are scaled back down by this factor: the renderer sizes
+// its PNG to the rendered image element's CSS box x DPR, so dividing by the DPR
+// reproduces the CSS-pixel dimensions the old `screenshot({ scale: 'css' })`
+// path wrote. Verified against a live book — the renderer emitted 1536x855 and
+// pages landed at 1024x570, matching previously extracted books. `capturePage`
+// logs both sizes on its first capture, so a reader-side change is visible.
 const DEVICE_SCALE_FACTOR = 1.5
 
 // Browser-aware TOC item: the shared `PageNav` position fields plus the
