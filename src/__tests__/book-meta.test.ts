@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolveBookMeta } from '../book-meta'
+import { hasExportableBookMeta, resolveBookMeta } from '../book-meta'
 import type { BookMetadata } from '../types'
 
 // Minimal meta with just the fields the exporters (and resolveBookMeta) read.
@@ -71,5 +71,45 @@ describe('resolveBookMeta', () => {
       'out/ABC-'
     )
     expect(result.title).toBe('ABC-')
+  })
+})
+
+describe('hasExportableBookMeta', () => {
+  it('accepts a book whose title was captured', () => {
+    expect(
+      hasExportableBookMeta(metaWith({ title: 'Example Book', authorList: [] }))
+    ).toBe(true)
+  })
+
+  // `info` (Kindle sync positions) has no downstream consumer: no exporter
+  // reads it, and Amazon now 403s the API that supplies it. Gating on it made
+  // every subsequent run relaunch a browser to chase something unrecoverable.
+  it('accepts a book that has meta but never captured info', () => {
+    const metadata: Partial<BookMetadata> = {
+      ...metaWith({ title: 'Example Book', authorList: [] }),
+      info: undefined
+    }
+    expect(hasExportableBookMeta(metadata)).toBe(true)
+  })
+
+  it('rejects a book with no meta at all', () => {
+    expect(hasExportableBookMeta({ meta: undefined })).toBe(false)
+  })
+
+  it('rejects meta that carries no title', () => {
+    expect(hasExportableBookMeta(metaWith({ authorList: [] }))).toBe(false)
+  })
+
+  // Must agree with resolveBookMeta, which trims before deciding a title is
+  // missing. If these two ever disagree, extraction would call a book complete
+  // that the exporters then treat as untitled.
+  it('rejects a whitespace-only title, matching resolveBookMeta', () => {
+    const metadata = metaWith({ title: '   ', authorList: [] })
+    expect(hasExportableBookMeta(metadata)).toBe(false)
+    expect(resolveBookMeta(metadata, 'out/X').synthesized).toBe(true)
+  })
+
+  it('rejects a non-string title', () => {
+    expect(hasExportableBookMeta(metaWith({ title: 42 as any }))).toBe(false)
   })
 })
