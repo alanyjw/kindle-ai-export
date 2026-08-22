@@ -46,6 +46,10 @@ export interface BookSteps {
   exportBookMarkdown: (opts: ExportBookMarkdownOptions) => Promise<unknown>
   exportBookPdf: (opts: { outDir: string }) => Promise<unknown>
   exportBookAudio: (opts: { outDir: string }) => Promise<unknown>
+  renameBookDir: (opts: {
+    outDir: string
+    asin: string
+  }) => Promise<{ renamed: boolean; outDir: string }>
 }
 
 async function step<T>(label: string, fn: () => Promise<T>): Promise<T> {
@@ -116,6 +120,31 @@ export async function runBook(
     )
   }
 
+  // Name the out-dir after the book, last.
+  //
+  // Extraction already does this as soon as Amazon's metadata arrives, and does
+  // it early so every recorded path is written with the final name. When that
+  // metadata never arrives the title is instead recovered by OCR during
+  // transcription, far too late for that rename — so catch it here, once every
+  // step that writes into the directory has finished.
+  //
+  // Deliberately outside `step()`: everything the user asked for is already on
+  // disk, so a rename that fails (a permission error, an open file handle on
+  // Windows) must not turn a successful run into a failed one.
+  if (resolved.kind === 'kindle') {
+    try {
+      const renamed = await steps.renameBookDir({
+        outDir: resolved.outDir,
+        asin: resolved.asin
+      })
+      return { outDir: renamed.outDir }
+    } catch (err: any) {
+      console.warn(
+        `⚠️  Could not rename the output directory: ${err?.message ?? String(err)}`
+      )
+    }
+  }
+
   return { outDir: resolved.outDir }
 }
 
@@ -135,7 +164,23 @@ const defaultBookSteps: BookSteps = {
   exportBookPdf: async (opts) =>
     (await import('./export-book-pdf')).exportBookPdf(opts),
   exportBookAudio: async (opts) =>
-    (await import('./export-book-audio')).exportBookAudio(opts)
+    (await import('./export-book-audio')).exportBookAudio(opts),
+  renameBookDir: async (opts) => {
+    const { renameBookDir } = await import('./rename-book-dir')
+    const result = await renameBookDir(opts, {
+      readFile: (p) => fs.readFile(p, 'utf8'),
+      writeFile: (p, data) => fs.writeFile(p, data),
+      rename: (from, to) => fs.rename(from, to),
+      exists: fileExists
+    })
+    if (result.renamed) {
+      console.warn(
+        `📁 Renamed output directory to ${path.basename(result.to!)} ` +
+          `(repointed ${result.rewritten} recorded page path(s))`
+      )
+    }
+    return result
+  }
 }
 
 const execFileAsync = promisify(execFile)
